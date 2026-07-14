@@ -1,4 +1,7 @@
 import * as THREE from 'three';
+import { EffectComposer } from './vendor/postprocessing/EffectComposer.js';
+import { RenderPass } from './vendor/postprocessing/RenderPass.js';
+import { BokehPass } from './vendor/postprocessing/BokehPass.js';
 
 // ---------------------------------------------------------------------
 // Timeline (seconds) — one linked story: Normal -> Fibrotic -> Treprostinil
@@ -43,23 +46,50 @@ function sampleCurve(t, kfs) {
 // Renderer / scene / camera
 // ---------------------------------------------------------------------
 const canvas = document.getElementById('c');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, preserveDrawingBuffer: true });
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, preserveDrawingBuffer: true });
 renderer.setSize(1920, 1080, false);
 renderer.setPixelRatio(1);
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(42, 1920 / 1080, 1, 60);
 
+// Baked vertical gradient standing in for the old CSS backdrop — the canvas
+// is opaque now so the depth-of-field pass has a real background to blur.
+function buildBackgroundTexture() {
+  const c = document.createElement('canvas');
+  c.width = 2; c.height = 512;
+  const ctx = c.getContext('2d');
+  const grad = ctx.createLinearGradient(0, 0, 0, 512);
+  grad.addColorStop(0.00, '#bfe9f2');
+  grad.addColorStop(0.08, '#8fd0e0');
+  grad.addColorStop(0.42, '#2e6f86');
+  grad.addColorStop(0.55, '#123a4d');
+  grad.addColorStop(0.78, '#071e2b');
+  grad.addColorStop(1.00, '#030f18');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 2, 512);
+  return new THREE.CanvasTexture(c);
+}
+scene.background = buildBackgroundTexture();
+
 const mainGroup = new THREE.Group();
 scene.add(mainGroup);
 
-scene.add(new THREE.AmbientLight(0xffffff, 0.65));
-const key = new THREE.DirectionalLight(0xffffff, 1.1);
+scene.add(new THREE.AmbientLight(0xffffff, 0.68));
+const key = new THREE.DirectionalLight(0xfff3e0, 1.1);
 key.position.set(6, 10, 8);
 scene.add(key);
-const rim = new THREE.DirectionalLight(0x7fd7e8, 0.5);
+const rim = new THREE.DirectionalLight(0x7fd7e8, 0.55);
 rim.position.set(-8, -4, -6);
 scene.add(rim);
+
+// Depth of field — keeps whatever the camera is looking at sharp while
+// nearer/farther geometry softens, for a more cinematic macro-lens feel.
+const composer = new EffectComposer(renderer);
+composer.setSize(1920, 1080);
+composer.addPass(new RenderPass(scene, camera));
+const bokehPass = new BokehPass(scene, camera, { focus: 12, aperture: 0.0028, maxblur: 0.009 });
+composer.addPass(bokehPass);
 
 // ---------------------------------------------------------------------
 // Labels (HTML overlay, positioned via projection each frame)
@@ -159,8 +189,8 @@ membraneGroup.add(leafletBottom);
 function buildBundle(x, color, helixCount = 7, radius = 0.42, height = 2.5, parent = mainGroup) {
   const g = new THREE.Group();
   g.position.set(x, 0, 0);
-  const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.45, metalness: 0.1, emissive: 0x000000 });
-  const helixGeo = new THREE.CylinderGeometry(0.11, 0.11, height, 10);
+  const mat = new THREE.MeshPhysicalMaterial({ color, roughness: 0.45, metalness: 0, clearcoat: 0.2, clearcoatRoughness: 0.4, emissive: 0x000000 });
+  const helixGeo = new THREE.CapsuleGeometry(0.11, height - 0.22, 4, 10);
   for (let i = 0; i < helixCount; i++) {
     const a = (i / helixCount) * Math.PI * 2;
     const m = new THREE.Mesh(helixGeo, mat);
@@ -174,8 +204,17 @@ function buildBundle(x, color, helixCount = 7, radius = 0.42, height = 2.5, pare
 }
 
 function buildLigand(parent = mainGroup, color = COL.ligand, radius = 0.26) {
-  const geo = new THREE.IcosahedronGeometry(radius, 0);
-  const mat = new THREE.MeshStandardMaterial({ color, emissive: 0x666666, roughness: 0.2, metalness: 0.3 });
+  const geo = new THREE.IcosahedronGeometry(radius, 3);
+  const posAttr = geo.attributes.position;
+  for (let i = 0; i < posAttr.count; i++) {
+    const v = new THREE.Vector3().fromBufferAttribute(posAttr, i);
+    const n = v.clone().normalize();
+    const bump = 1 + (Math.sin(n.x * 7) * Math.sin(n.y * 6) * Math.sin(n.z * 5)) * 0.05;
+    v.multiplyScalar(bump);
+    posAttr.setXYZ(i, v.x, v.y, v.z);
+  }
+  geo.computeVertexNormals();
+  const mat = new THREE.MeshPhysicalMaterial({ color, emissive: 0x555555, roughness: 0.35, metalness: 0, clearcoat: 0.12, clearcoatRoughness: 0.45 });
   const m = new THREE.Mesh(geo, mat);
   parent.add(m);
   return m;
@@ -183,10 +222,10 @@ function buildLigand(parent = mainGroup, color = COL.ligand, radius = 0.26) {
 
 function buildGProtein(parent = mainGroup) {
   const g = new THREE.Group();
-  const alphaMat = new THREE.MeshStandardMaterial({ color: COL.galpha, roughness: 0.35 });
-  const bgMat = new THREE.MeshStandardMaterial({ color: COL.gbg, roughness: 0.35 });
-  const alpha = new THREE.Mesh(new THREE.SphereGeometry(0.32, 16, 16), alphaMat);
-  const beta = new THREE.Mesh(new THREE.SphereGeometry(0.24, 16, 16), bgMat);
+  const alphaMat = new THREE.MeshPhysicalMaterial({ color: COL.galpha, roughness: 0.35, clearcoat: 0.2, clearcoatRoughness: 0.35 });
+  const bgMat = new THREE.MeshPhysicalMaterial({ color: COL.gbg, roughness: 0.35, clearcoat: 0.2, clearcoatRoughness: 0.35 });
+  const alpha = new THREE.Mesh(new THREE.SphereGeometry(0.32, 20, 20), alphaMat);
+  const beta = new THREE.Mesh(new THREE.SphereGeometry(0.24, 18, 18), bgMat);
   const gamma = new THREE.Mesh(new THREE.SphereGeometry(0.16, 16, 16), bgMat);
   beta.position.set(0.4, -0.05, 0);
   gamma.position.set(0.62, -0.3, 0);
@@ -561,6 +600,12 @@ function setSceneTime(t) {
   const { a, b, mix } = cameraForTime(t);
   lerpV3(camPos, a.pos, b.pos, mix);
   lerpV3(camTarget, a.look, b.look, mix);
+  // Subtle continuous drift on top of the keyframed blocking, for a
+  // handheld/cinematic feel rather than a perfectly locked-off camera.
+  const driftX = Math.sin(t * 0.35) * 0.10 + Math.sin(t * 0.13 + 1.7) * 0.05;
+  const driftY = Math.cos(t * 0.27 + 0.6) * 0.06;
+  camPos.x += driftX; camPos.y += driftY;
+  camTarget.x += driftX * 0.4; camTarget.y += driftY * 0.4;
   camera.position.copy(camPos);
   camera.lookAt(camTarget);
 
@@ -710,14 +755,15 @@ function setSceneTime(t) {
   // ---- captions ----
   updateCaptionTrack(t);
 
-  renderer.render(scene, camera);
+  bokehPass.uniforms['focus'].value = camPos.distanceTo(camTarget);
+  composer.render();
 }
 
 // initialize once
 setSceneTime(0);
 
 window.setSceneTime = setSceneTime;
-window.renderOnce = () => renderer.render(scene, camera);
+window.renderOnce = () => composer.render();
 window.sceneReady = true;
 
 // interactive preview loop (ignored during frame capture, which drives time explicitly)

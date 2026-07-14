@@ -24,6 +24,17 @@
     top:0; left:0;
     width:1920px; height:1080px;
     display:block;
+    filter:contrast(1.08) saturate(1.14) brightness(1.03);
+  }
+  #vignette{
+    position:absolute;
+    top:0; left:0;
+    width:1920px; height:1080px;
+    pointer-events:none;
+    background:radial-gradient(ellipse at center,
+      rgba(0,0,0,0) 45%,
+      rgba(0,0,0,0.16) 78%,
+      rgba(0,0,0,0.42) 100%);
   }
   .zone-tag{
     position:absolute;
@@ -249,6 +260,7 @@
 <body>
   <div id="app">
     <canvas id="c" width="1920" height="1080"></canvas>
+    <div id="vignette"></div>
     <div id="tag-extra" class="zone-tag">Extracellular space</div>
     <div id="tag-cyto" class="zone-tag">Cytoplasm</div>
     <div id="labels"></div>
