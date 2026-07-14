@@ -291,11 +291,18 @@ const receptors = RECEPTOR_DEFS.map((def) => {
   return { ...def, g, anchor, label, dockPos, ligandStartPos, ligandExitPos, ligandNormal, ligandTreprostinil, gprotein, gDockPos, alphaTargetOffset };
 });
 
+// Molecule labels — anchored directly to one representative instance so
+// ATP, cAMP and the G protein subunits are identifiable, not just colored dots
+const gAlphaLabel = makeLabel('Gα', { anchor: receptors[1].gprotein.userData.alpha, offsetY: 0.55, color: '#ffe9a8' });
+const gBetaGammaLabel = makeLabel('Gβγ', { anchor: receptors[1].gprotein.userData.bg, offsetY: -0.35, color: '#c3cdf5' });
+
 const N_MOLECULES = 6;
 const converters = [];
 for (let i = 0; i < N_MOLECULES; i++) {
   converters.push({ atp: buildATP(), camp: buildCAMP(), phase: i / N_MOLECULES, lane: (Math.random() - 0.5) * 1.6, driftSeed: Math.random() * 10 });
 }
+const atpLabel = makeLabel('ATP', { anchor: converters[0].atp, offsetY: 0.32, color: '#ffcf8a' });
+const campMoleculeLabel = makeLabel('cAMP', { anchor: converters[0].camp, offsetY: 0.32, color: '#ffe9a8' });
 
 const N_CLOUD = 40;
 const cloudParticles = [];
@@ -442,10 +449,8 @@ const CAPTIONS = [
   [29, 32, 'cAMP rises — downstream effects follow', 'Vasodilation, antiproliferation, anti-inflammation'],
   [32, 37, 'In fibrotic disease, intracellular cAMP concentration falls', 'The exact upstream cause is not fully defined'],
   [37, 50, 'cAMP levels remain low', 'Downstream effects are reduced as a result'],
-  [47, 53, 'Treprostinil binds the EP2, IP and DP1 receptors', 'Restoring receptor engagement'],
-  [53, 58, 'The Gs protein is reactivated', ''],
-  [58, 62, 'Adenylate cyclase is reactivated', ''],
-  [62, 65, 'cAMP production resumes', ''],
+  [47, 60, 'Treprostinil binds the EP2, IP and DP1 receptors', 'Restoring receptor engagement'],
+  [60, 65, 'Intracellular cAMP concentration increases', 'cAMP production resumes'],
   [65, 70, 'A parallel PPARβ pathway may also contribute', 'Hypothesized mechanism'],
 ];
 function updateCaptionTrack(t) {
@@ -468,7 +473,7 @@ function setSceneTime(t) {
   let titleOpacity = 0;
   if (t < STAGES.title[1]) {
     titlecardH1.textContent = 'Three Cellular States';
-    titlecardH2.textContent = 'Normal → fibrotic → with treprostinil';
+    titlecardH2.textContent = 'Normal → fibrotic → fibrotic with treprostinil';
     const p = clamp01(t / STAGES.title[1]);
     titleOpacity = smoothstep(Math.min(p * 3, 1)) * (t > STAGES.title[1] - 0.6 ? smoothstep((STAGES.title[1] - t) / 0.6) : 1);
   }
@@ -499,7 +504,7 @@ function setSceneTime(t) {
   let headerText, headerColor, subText;
   if (t < STAGES.fibrotic[0]) { headerText = '1. NORMAL STATE'; headerColor = '#7fe0a0'; subText = 'Functional cAMP signaling'; }
   else if (t < STAGES.treated[0]) { headerText = '2. FIBROTIC STATE'; headerColor = '#ff9a8a'; subText = 'Reduced cAMP concentration — cause not fully defined'; }
-  else { headerText = '3. WITH TREPROSTINIL'; headerColor = '#7fd7e8'; subText = 'Restored / rebalanced signaling'; }
+  else { headerText = '3. FIBROTIC WITH TREPROSTINIL'; headerColor = '#7fd7e8'; subText = 'Treprostinil increases intracellular cAMP'; }
   headerLabel.el.textContent = headerText;
   headerLabel.el.style.color = headerColor;
   subLabel.el.textContent = subText;
@@ -581,6 +586,13 @@ function setSceneTime(t) {
       c.camp.rotation.y = t * 1.5 + c.driftSeed;
     }
   }
+  updateLabel(atpLabel, cActive ? 1 : 0);
+  updateLabel(campMoleculeLabel, cActive ? 1 : 0);
+
+  // ---- G protein subunit labels (shown once, during the first activation) ----
+  const gLabelOpacity = sampleCurve(t, [[10, 0], [12, 1], [19, 1], [21, 0]]);
+  updateLabel(gAlphaLabel, gLabelOpacity);
+  updateLabel(gBetaGammaLabel, gLabelOpacity);
 
   // ---- cAMP meter + cloud ----
   const level = campLevel(t);
@@ -599,7 +611,7 @@ function setSceneTime(t) {
   nucleusMat.opacity = 0.2 + 0.28 * level;
   dna.rotation.y = t * 0.22;
   for (const m of dna.userData.mats) m.emissive.copy(m.color).multiplyScalar(0.28 * level);
-  const nucleusText = t < STAGES.fibrotic[0] ? 'Gene transcription — active' : t < 59 ? 'Gene transcription — reduced' : 'Gene transcription — restored';
+  const nucleusText = t < STAGES.fibrotic[0] ? 'Gene transcription — active' : t < 59 ? 'Gene transcription — reduced' : 'Gene transcription — increases';
   nucleusLabel.el.textContent = nucleusText;
   updateLabel(nucleusLabel, headerOpacity);
 
@@ -607,7 +619,7 @@ function setSceneTime(t) {
   let dsTitle, dsLines;
   if (t < STAGES.fibrotic[0]) { dsTitle = 'DOWNSTREAM EFFECTS'; dsLines = ['Vasodilation', 'Antiproliferation', 'Anti-inflammation']; }
   else if (t < 59) { dsTitle = 'DOWNSTREAM EFFECTS (REDUCED)'; dsLines = ['↓ Vasodilation', '↓ Antiproliferation', '↓ Anti-inflammation']; }
-  else { dsTitle = 'DOWNSTREAM EFFECTS (RESTORED)'; dsLines = ['↑ Vasodilation', '↑ Antiproliferation', '↑ Anti-inflammation']; }
+  else { dsTitle = 'DOWNSTREAM EFFECTS (INCREASED)'; dsLines = ['↑ Vasodilation', '↑ Antiproliferation', '↑ Anti-inflammation']; }
   const cardOpacity = sampleCurve(t, [[28, 0], [31, 1]]);
   updateCard(downstreamCard, dsTitle, dsLines, cardOpacity);
 
