@@ -1,23 +1,15 @@
 import * as THREE from 'three';
 
 // ---------------------------------------------------------------------
-// Timeline (seconds)
+// Timeline (seconds) — one linked story: Normal -> Fibrotic -> Treprostinil
 // ---------------------------------------------------------------------
 export const FPS = 30;
 export const STAGES = {
-  title:        [0.0, 3.0],
-  binding:      [3.0, 9.0],
-  gprotein:     [9.0, 15.0],
-  ac:           [15.0, 20.0],
-  atpcamp:      [20.0, 27.0],
-  campaccum:    [27.0, 32.0],
-  antifibrotic: [32.0, 38.5],
-  statesTitle:  [38.5, 41.5],
-  stateNormal:  [41.5, 49.0],
-  stateFibrotic:[49.0, 56.5],
-  stateTreated: [56.5, 66.5],
-  statesWide:   [66.5, 74.5],
-  outro:        [74.5, 78.5],
+  title:    [0.0, 3.0],
+  normal:   [3.0, 30.0],
+  fibrotic: [30.0, 45.0],
+  treated:  [45.0, 68.0],
+  outro:    [68.0, 72.0],
 };
 export const TOTAL_DURATION = STAGES.outro[1];
 window.FPS = FPS;
@@ -27,10 +19,6 @@ window.TOTAL_DURATION = TOTAL_DURATION;
 // Helpers
 // ---------------------------------------------------------------------
 const clamp01 = (x) => Math.max(0, Math.min(1, x));
-function progress(stageName, t) {
-  const [a, b] = STAGES[stageName];
-  return clamp01((t - a) / (b - a));
-}
 function smoothstep(x) {
   const t = clamp01(x);
   return t * t * (3 - 2 * t);
@@ -40,12 +28,15 @@ function lerpV3(out, a, b, t) {
   out.set(lerp(a.x, b.x, t), lerp(a.y, b.y, t), lerp(a.z, b.z, t));
   return out;
 }
-function inStage(name, t) {
-  const [a, b] = STAGES[name];
-  return t >= a && t < b;
-}
-function atOrAfter(name, t) {
-  return t >= STAGES[name][0];
+// Piecewise-smooth curve sampler: kfs = [[t0,v0],[t1,v1],...] sorted by t.
+function sampleCurve(t, kfs) {
+  if (t <= kfs[0][0]) return kfs[0][1];
+  for (let i = 0; i < kfs.length - 1; i++) {
+    const [ta, va] = kfs[i];
+    const [tb, vb] = kfs[i + 1];
+    if (t <= tb) return lerp(va, vb, smoothstep((t - ta) / (tb - ta)));
+  }
+  return kfs[kfs.length - 1][1];
 }
 
 // ---------------------------------------------------------------------
@@ -61,9 +52,6 @@ const camera = new THREE.PerspectiveCamera(42, 1920 / 1080, 1, 60);
 
 const mainGroup = new THREE.Group();
 scene.add(mainGroup);
-const statesGroup = new THREE.Group();
-scene.add(statesGroup);
-statesGroup.visible = false;
 
 scene.add(new THREE.AmbientLight(0xffffff, 0.65));
 const key = new THREE.DirectionalLight(0xffffff, 1.1);
@@ -77,16 +65,13 @@ scene.add(rim);
 // Labels (HTML overlay, positioned via projection each frame)
 // ---------------------------------------------------------------------
 const labelLayer = document.getElementById('labels');
-const labels = [];
 function makeLabel(text, opts = {}) {
   const el = document.createElement('div');
   el.className = 'obj-label' + (opts.sub ? ' sub' : '');
   el.textContent = text;
   if (opts.color) el.style.color = opts.color;
   labelLayer.appendChild(el);
-  const entry = { el, anchor: opts.anchor || new THREE.Object3D(), offsetY: opts.offsetY || 0 };
-  labels.push(entry);
-  return entry;
+  return { el, anchor: opts.anchor || new THREE.Object3D(), offsetY: opts.offsetY || 0 };
 }
 function updateLabel(entry, opacity) {
   const v = new THREE.Vector3();
@@ -98,6 +83,26 @@ function updateLabel(entry, opacity) {
   entry.el.style.left = x + 'px';
   entry.el.style.top = y + 'px';
   entry.el.style.opacity = String(clamp01(opacity));
+}
+
+const cardLayer = document.getElementById('cards');
+function makeCard(opts = {}) {
+  const el = document.createElement('div');
+  el.className = 'info-card';
+  cardLayer.appendChild(el);
+  return { el, anchor: opts.anchor || new THREE.Object3D(), offsetY: opts.offsetY || 0 };
+}
+function updateCard(entry, title, lines, opacity) {
+  const v = new THREE.Vector3();
+  entry.anchor.getWorldPosition(v);
+  v.y += entry.offsetY;
+  v.project(camera);
+  const x = (v.x * 0.5 + 0.5) * 1920;
+  const y = (-v.y * 0.5 + 0.5) * 1080;
+  entry.el.style.left = x + 'px';
+  entry.el.style.top = y + 'px';
+  entry.el.style.opacity = String(clamp01(opacity));
+  entry.el.innerHTML = `<div class="title">${title}</div>` + lines.map((l) => `<div class="line">${l}</div>`).join('');
 }
 
 const captionEl = document.getElementById('caption');
@@ -121,56 +126,47 @@ const legendEl = document.getElementById('legend');
 // Palette
 // ---------------------------------------------------------------------
 const COL = {
-  receptorEP2: 0x5fb8c9,
-  receptorIP: 0x6fd0a8,
-  receptorDP1: 0xc9a3e0,
-  ac: 0xf0955a,
-  ligand: 0xffffff,
+  receptor: 0xb79fd1,
+  ac: 0x5fa8c9,
+  ligand: 0xd6dde2,
+  treprostinil: 0x6fc3f0,
   galpha: 0xffd76a,
   gbg: 0x9fb8ff,
   atp: 0xd8d8d8,
   camp: 0xffd76a,
-  fibroblastActive: 0xe0654f,
-  fibroblastQuiet: 0x7fbf8f,
-  collagen: 0xe0654f,
+  gray: 0x555a66,
 };
+const grayColor = new THREE.Color(COL.gray);
 
 // ---------------------------------------------------------------------
 // Membrane
 // ---------------------------------------------------------------------
 const membraneGroup = new THREE.Group();
 mainGroup.add(membraneGroup);
-
-const membraneMat = new THREE.MeshPhysicalMaterial({
-  color: 0x2c7e93, transparent: true, opacity: 0.28, roughness: 0.4, metalness: 0.0,
-  side: THREE.DoubleSide,
-});
-const membraneSlab = new THREE.Mesh(new THREE.BoxGeometry(15.5, 1.5, 5.5), membraneMat);
+const membraneMat = new THREE.MeshPhysicalMaterial({ color: 0x2c7e93, transparent: true, opacity: 0.28, roughness: 0.4, side: THREE.DoubleSide });
+const membraneSlab = new THREE.Mesh(new THREE.BoxGeometry(12, 1.4, 5), membraneMat);
 membraneGroup.add(membraneSlab);
-
 const leafletMat = new THREE.MeshBasicMaterial({ color: 0x9fe6f2, transparent: true, opacity: 0.22 });
-const leafletTop = new THREE.Mesh(new THREE.PlaneGeometry(15.5, 5.5), leafletMat);
+const leafletTop = new THREE.Mesh(new THREE.PlaneGeometry(12, 5), leafletMat);
 leafletTop.rotation.x = -Math.PI / 2;
-leafletTop.position.y = 0.76;
+leafletTop.position.y = 0.72;
 membraneGroup.add(leafletTop);
 const leafletBottom = leafletTop.clone();
-leafletBottom.position.y = -0.76;
+leafletBottom.position.y = -0.72;
 membraneGroup.add(leafletBottom);
 
 // ---------------------------------------------------------------------
-// Transmembrane bundle builder (receptors + adenylate cyclase)
+// Builders (transmembrane bundle, ligand, G protein, ATP/cAMP, DNA)
 // ---------------------------------------------------------------------
-function buildBundle(x, color, helixCount = 7, radius = 0.42, height = 2.5, parent = mainGroup, y = 0) {
+function buildBundle(x, color, helixCount = 7, radius = 0.42, height = 2.5, parent = mainGroup) {
   const g = new THREE.Group();
-  g.position.set(x, y, 0);
+  g.position.set(x, 0, 0);
   const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.45, metalness: 0.1, emissive: 0x000000 });
   const helixGeo = new THREE.CylinderGeometry(0.11, 0.11, height, 10);
   for (let i = 0; i < helixCount; i++) {
     const a = (i / helixCount) * Math.PI * 2;
-    const hx = Math.cos(a) * radius;
-    const hz = Math.sin(a) * radius;
     const m = new THREE.Mesh(helixGeo, mat);
-    m.position.set(hx, 0, hz);
+    m.position.set(Math.cos(a) * radius, 0, Math.sin(a) * radius);
     g.add(m);
   }
   g.userData.mat = mat;
@@ -179,47 +175,14 @@ function buildBundle(x, color, helixCount = 7, radius = 0.42, height = 2.5, pare
   return g;
 }
 
-const rEP2 = buildBundle(-5.2, COL.receptorEP2);
-const rIP  = buildBundle(-1.9, COL.receptorIP);
-const rDP1 = buildBundle(1.4, COL.receptorDP1);
-const ac   = buildBundle(5.0, COL.ac, 9, 0.5, 2.7);
-
-const receptors = [
-  { g: rEP2, name: 'EP2', delay: 0.0 },
-  { g: rIP,  name: 'IP',  delay: 0.35 },
-  { g: rDP1, name: 'DP1', delay: 0.7 },
-];
-
-for (const r of receptors) {
-  const anchor = new THREE.Object3D();
-  anchor.position.set(r.g.position.x, 1.6, 0);
-  scene.add(anchor);
-  r.label = makeLabel(r.name, { anchor, color: '#ffffff' });
-}
-const acAnchor = new THREE.Object3D();
-acAnchor.position.set(ac.position.x, 1.7, 0);
-scene.add(acAnchor);
-const acLabel = makeLabel('Adenylate cyclase', { anchor: acAnchor, sub: true, color: '#ffcaa3' });
-
-// ---------------------------------------------------------------------
-// Ligands (drug molecules) — descend from extracellular space and dock
-// ---------------------------------------------------------------------
-function buildLigand(parent = mainGroup, color = COL.ligand, radius = 0.28) {
+function buildLigand(parent = mainGroup, color = COL.ligand, radius = 0.26) {
   const geo = new THREE.IcosahedronGeometry(radius, 0);
   const mat = new THREE.MeshStandardMaterial({ color, emissive: 0x666666, roughness: 0.2, metalness: 0.3 });
   const m = new THREE.Mesh(geo, mat);
   parent.add(m);
   return m;
 }
-for (const r of receptors) {
-  r.ligand = buildLigand();
-  r.startPos = new THREE.Vector3(r.g.position.x + 0.6, 5.5, 0.9);
-  r.dockPos = new THREE.Vector3(r.g.position.x, 1.05, 0);
-}
 
-// ---------------------------------------------------------------------
-// G protein trimer (Galpha + Gbetagamma) per receptor
-// ---------------------------------------------------------------------
 function buildGProtein(parent = mainGroup) {
   const g = new THREE.Group();
   const alphaMat = new THREE.MeshStandardMaterial({ color: COL.galpha, roughness: 0.35 });
@@ -235,27 +198,16 @@ function buildGProtein(parent = mainGroup) {
   g.userData.alpha = alpha;
   g.userData.bg = bg;
   g.userData.alphaMat = alphaMat;
-  g.userData.bgMat = bgMat;
   parent.add(g);
   return g;
 }
-for (const r of receptors) {
-  r.gprotein = buildGProtein();
-  r.gDockPos = new THREE.Vector3(r.g.position.x - 0.3, -1.35, 0);
-}
-const acActiveSite = new THREE.Vector3(ac.position.x - 0.5, -1.25, 0);
 
-// ---------------------------------------------------------------------
-// ATP -> cAMP conversion particles at the adenylate cyclase active site
-// ---------------------------------------------------------------------
 function buildATP(parent = mainGroup) {
   const g = new THREE.Group();
-  const core = new THREE.Mesh(new THREE.SphereGeometry(0.15, 12, 12), new THREE.MeshStandardMaterial({ color: COL.atp }));
-  g.add(core);
+  g.add(new THREE.Mesh(new THREE.SphereGeometry(0.15, 12, 12), new THREE.MeshStandardMaterial({ color: COL.atp })));
   for (let i = 0; i < 3; i++) {
     const p = new THREE.Mesh(new THREE.SphereGeometry(0.085, 10, 10), new THREE.MeshStandardMaterial({ color: 0xffb14a }));
     p.position.set(0.2 + i * 0.17, 0.05 * (i % 2 === 0 ? 1 : -1), 0);
-    p.name = 'phosphate' + i;
     g.add(p);
   }
   parent.add(g);
@@ -264,127 +216,15 @@ function buildATP(parent = mainGroup) {
 function buildCAMP(parent = mainGroup) {
   const g = new THREE.Group();
   const mat = new THREE.MeshStandardMaterial({ color: COL.camp, emissive: 0x442e00, emissiveIntensity: 0.6 });
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.05, 10, 20), mat);
-  g.add(ring);
+  g.add(new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.05, 10, 20), mat));
   g.userData.mat = mat;
   parent.add(g);
   return g;
 }
 
-const N_MOLECULES = 6;
-const converters = [];
-for (let i = 0; i < N_MOLECULES; i++) {
-  converters.push({
-    atp: buildATP(),
-    camp: buildCAMP(),
-    phase: i / N_MOLECULES,
-    lane: (Math.random() - 0.5) * 1.6,
-    driftSeed: Math.random() * 10,
-  });
-}
-
-// ---------------------------------------------------------------------
-// cAMP accumulation cloud (cytoplasm)
-// ---------------------------------------------------------------------
-const N_CLOUD = 40;
-const cloudParticles = [];
-const cloudMat = new THREE.MeshStandardMaterial({ color: COL.camp, emissive: 0x442e00, emissiveIntensity: 0.5 });
-const cloudGeo = new THREE.SphereGeometry(0.09, 8, 8);
-for (let i = 0; i < N_CLOUD; i++) {
-  const m = new THREE.Mesh(cloudGeo, cloudMat);
-  mainGroup.add(m);
-  cloudParticles.push({
-    mesh: m,
-    basePos: new THREE.Vector3(
-      lerp(-4.5, 6.5, Math.random()),
-      lerp(-4.8, -1.6, Math.random()),
-      lerp(-2.2, 2.2, Math.random())
-    ),
-    seed: Math.random() * 20,
-    order: i / N_CLOUD,
-  });
-}
-
-// ---------------------------------------------------------------------
-// Fibroblast (activated -> quiescent) deep in cytoplasm
-// ---------------------------------------------------------------------
-const fibroPos = new THREE.Vector3(1.0, -6.6, 0.5);
-const fibroBaseGeo = new THREE.IcosahedronGeometry(0.7, 3);
-const fibroPositions = fibroBaseGeo.attributes.position;
-const fibroNormals = fibroBaseGeo.attributes.normal.clone();
-const vertCount = fibroPositions.count;
-const spikeNoise = new Float32Array(vertCount);
-for (let i = 0; i < vertCount; i++) {
-  spikeNoise[i] = 0.22 + Math.random() * 0.4;
-}
-const fibroMat = new THREE.MeshStandardMaterial({
-  color: COL.fibroblastActive, roughness: 0.55, metalness: 0.05, flatShading: true,
-});
-const fibroMesh = new THREE.Mesh(fibroBaseGeo, fibroMat);
-fibroMesh.position.copy(fibroPos);
-mainGroup.add(fibroMesh);
-
-const nucleusMesh = new THREE.Mesh(new THREE.SphereGeometry(0.42, 16, 16), new THREE.MeshStandardMaterial({ color: 0x5a3a55 }));
-nucleusMesh.position.copy(fibroPos);
-mainGroup.add(nucleusMesh);
-
-const N_COLLAGEN = 14;
-const collagenFibers = [];
-const collagenMat = new THREE.MeshStandardMaterial({ color: COL.collagen, roughness: 0.6 });
-for (let i = 0; i < N_COLLAGEN; i++) {
-  const len = 1.1 + Math.random() * 0.9;
-  const geo = new THREE.CylinderGeometry(0.035, 0.035, len, 6);
-  const m = new THREE.Mesh(geo, collagenMat);
-  const dir = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
-  const start = fibroPos.clone().addScaledVector(dir, 0.75);
-  const mid = start.clone().addScaledVector(dir, len / 2);
-  m.position.copy(mid);
-  m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
-  mainGroup.add(m);
-  collagenFibers.push({ mesh: m, baseLen: len, baseScale: 1 });
-}
-
-const fibroAnchor = new THREE.Object3D();
-fibroAnchor.position.set(fibroPos.x, fibroPos.y + 1.5, fibroPos.z);
-scene.add(fibroAnchor);
-const fibroLabel = makeLabel('Fibroblast', { anchor: fibroAnchor, color: '#ffffff' });
-const fibroSubAnchor = new THREE.Object3D();
-fibroSubAnchor.position.set(fibroPos.x, fibroPos.y + 1.15, fibroPos.z);
-scene.add(fibroSubAnchor);
-const fibroSubLabel = makeLabel('activated', { anchor: fibroSubAnchor, sub: true, color: '#ffb3a3' });
-
-// ---------------------------------------------------------------------
-// Info cards (HTML overlay boxes with a title + bullet lines)
-// ---------------------------------------------------------------------
-const cardLayer = document.getElementById('cards');
-const cards = [];
-function makeCard(opts = {}) {
-  const el = document.createElement('div');
-  el.className = 'info-card';
-  cardLayer.appendChild(el);
-  const entry = { el, anchor: opts.anchor || new THREE.Object3D(), offsetY: opts.offsetY || 0 };
-  cards.push(entry);
-  return entry;
-}
-function updateCard(entry, title, lines, opacity) {
-  const v = new THREE.Vector3();
-  entry.anchor.getWorldPosition(v);
-  v.y += entry.offsetY;
-  v.project(camera);
-  const x = (v.x * 0.5 + 0.5) * 1920;
-  const y = (-v.y * 0.5 + 0.5) * 1080;
-  entry.el.style.left = x + 'px';
-  entry.el.style.top = y + 'px';
-  entry.el.style.opacity = String(clamp01(opacity));
-  entry.el.innerHTML = `<div class="title">${title}</div>` + lines.map((l) => `<div class="line">${l}</div>`).join('');
-}
-
-// ---------------------------------------------------------------------
-// DNA double helix (used inside each state panel's nucleus)
-// ---------------------------------------------------------------------
 function buildDNAHelix(parent, colorA = 0x8fd7ea, colorB = 0x5fa8c9) {
   const group = new THREE.Group();
-  const radius = 0.32, height = 1.9, turns = 2.2, segments = 48;
+  const radius = 0.34, height = 2.1, turns = 2.3, segments = 48;
   const pts1 = [], pts2 = [];
   for (let i = 0; i <= segments; i++) {
     const tt = i / segments;
@@ -397,475 +237,383 @@ function buildDNAHelix(parent, colorA = 0x8fd7ea, colorB = 0x5fa8c9) {
   const curve2 = new THREE.CatmullRomCurve3(pts2);
   const mat1 = new THREE.MeshStandardMaterial({ color: colorA, roughness: 0.3, emissive: 0x000000 });
   const mat2 = new THREE.MeshStandardMaterial({ color: colorB, roughness: 0.3, emissive: 0x000000 });
-  const strand1 = new THREE.Mesh(new THREE.TubeGeometry(curve1, segments, 0.045, 6, false), mat1);
-  const strand2 = new THREE.Mesh(new THREE.TubeGeometry(curve2, segments, 0.045, 6, false), mat2);
-  group.add(strand1, strand2);
-
+  group.add(new THREE.Mesh(new THREE.TubeGeometry(curve1, segments, 0.045, 6, false), mat1));
+  group.add(new THREE.Mesh(new THREE.TubeGeometry(curve2, segments, 0.045, 6, false), mat2));
   const rungMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.4 });
-  const rungCount = 9;
-  for (let i = 1; i < rungCount; i++) {
-    const tt = i / rungCount;
-    const p1 = curve1.getPointAt(tt);
-    const p2 = curve2.getPointAt(tt);
+  for (let i = 1; i < 9; i++) {
+    const tt = i / 9;
+    const p1 = curve1.getPointAt(tt), p2 = curve2.getPointAt(tt);
     const mid = p1.clone().lerp(p2, 0.5);
-    const dist = p1.distanceTo(p2);
-    const rung = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, dist, 6), rungMat);
+    const rung = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, p1.distanceTo(p2), 6), rungMat);
     rung.position.copy(mid);
     rung.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), p2.clone().sub(p1).normalize());
     group.add(rung);
   }
   group.userData.mats = [mat1, mat2];
-  group.userData.baseColors = [new THREE.Color(colorA), new THREE.Color(colorB)];
   parent.add(group);
   return group;
 }
 
 // ---------------------------------------------------------------------
-// Three cellular states — Normal / Fibrotic / With treprostinil
+// The single cell setup — reused across all three acts
 // ---------------------------------------------------------------------
-const PANEL_COL = { receptor: 0xb79fd1, ac: 0x5fa8c9, treprostinil: 0x6fc3f0 };
-const PANEL_X = { normal: -15, fibrotic: 0, treated: 15 };
+const receptor = buildBundle(-2.0, COL.receptor, 7, 0.38, 2.2);
+const ac = buildBundle(2.0, COL.ac, 9, 0.44, 2.4);
 
-function buildPanel(centerX) {
-  const memMat = new THREE.MeshPhysicalMaterial({ color: 0x2c7e93, transparent: true, opacity: 0.28, roughness: 0.4, side: THREE.DoubleSide });
-  const memSlab = new THREE.Mesh(new THREE.BoxGeometry(7.2, 1.3, 4), memMat);
-  memSlab.position.set(centerX, 0, 0);
-  statesGroup.add(memSlab);
-  const leafMat = new THREE.MeshBasicMaterial({ color: 0x9fe6f2, transparent: true, opacity: 0.22 });
-  const leaf1 = new THREE.Mesh(new THREE.PlaneGeometry(7.2, 4), leafMat);
-  leaf1.rotation.x = -Math.PI / 2;
-  leaf1.position.set(centerX, 0.68, 0);
-  statesGroup.add(leaf1);
-  const leaf2 = leaf1.clone();
-  leaf2.position.set(centerX, -0.68, 0);
-  statesGroup.add(leaf2);
+const receptorAnchor = new THREE.Object3D();
+receptorAnchor.position.set(receptor.position.x, 1.7, 0);
+scene.add(receptorAnchor);
+const receptorLabel = makeLabel('Receptor (prostanoid)', { anchor: receptorAnchor, color: '#ffffff' });
 
-  const receptor = buildBundle(centerX - 1.5, PANEL_COL.receptor, 7, 0.34, 2.0, statesGroup);
-  const ac = buildBundle(centerX + 1.5, PANEL_COL.ac, 9, 0.4, 2.2, statesGroup);
-  const gprotein = buildGProtein(statesGroup);
-  gprotein.position.set(centerX - 1.8, -1.05, 0);
+const acAnchor = new THREE.Object3D();
+acAnchor.position.set(ac.position.x, 1.8, 0);
+scene.add(acAnchor);
+const acLabel = makeLabel('Adenylate cyclase', { anchor: acAnchor, color: '#ffcaa3' });
 
-  const ligand = buildLigand(statesGroup, COL.ligand, 0.22);
-  ligand.position.set(centerX - 1.5, 1.35, 0.42);
+const dockPos = new THREE.Vector3(receptor.position.x, 1.15, 0);
+const ligandStartPos = new THREE.Vector3(receptor.position.x + 0.7, 5.5, 0.9);
+const ligandExitPos = new THREE.Vector3(receptor.position.x - 2.2, 4.4, -1.3);
+const ligandNormal = buildLigand(mainGroup, COL.ligand, 0.26);
+const ligandTreprostinil = buildLigand(mainGroup, COL.treprostinil, 0.24);
 
-  const campDots = [];
-  for (let i = 0; i < 8; i++) {
-    const c = buildCAMP(statesGroup);
-    c.scale.setScalar(0.75);
-    c.userData.basePos = new THREE.Vector3(
-      centerX + 1.0 + (Math.random() - 0.5) * 1.6,
-      -1.7 - Math.random() * 0.9,
-      (Math.random() - 0.5) * 1.3
-    );
-    c.position.copy(c.userData.basePos);
-    c.userData.seed = Math.random() * 10;
-    campDots.push(c);
-  }
+const gprotein = buildGProtein();
+const gDockPos = new THREE.Vector3(receptor.position.x - 0.35, -1.4, 0);
+const acActiveSite = new THREE.Vector3(ac.position.x - 0.5, -1.3, 0);
 
-  const nucleusGrp = new THREE.Group();
-  nucleusGrp.position.set(centerX, -3.7, 0);
-  statesGroup.add(nucleusGrp);
-  const nucleusMat = new THREE.MeshPhysicalMaterial({ color: 0x2c3a55, transparent: true, opacity: 0.35, roughness: 0.4 });
-  const nucleusShell = new THREE.Mesh(new THREE.SphereGeometry(1.15, 20, 20), nucleusMat);
-  nucleusGrp.add(nucleusShell);
-  const dna = buildDNAHelix(nucleusGrp);
-  dna.scale.setScalar(1.15);
-
-  const xAnchor = new THREE.Object3D();
-  xAnchor.position.set(centerX, 0.2, 1.3);
-  scene.add(xAnchor);
-  const xLabel = makeLabel('✕', { anchor: xAnchor });
-  xLabel.el.classList.add('xmark');
-
-  const headerAnchor = new THREE.Object3D();
-  headerAnchor.position.set(centerX, 2.95, 0);
-  scene.add(headerAnchor);
-  const headerLabel = makeLabel('', { anchor: headerAnchor });
-  headerLabel.el.classList.add('panel-header');
-
-  const subAnchor = new THREE.Object3D();
-  subAnchor.position.set(centerX, 2.55, 0);
-  scene.add(subAnchor);
-  const subLabel = makeLabel('', { anchor: subAnchor });
-  subLabel.el.classList.add('panel-sub');
-
-  const downstreamAnchor = new THREE.Object3D();
-  downstreamAnchor.position.set(centerX + 1.5, -2.35, 1.6);
-  scene.add(downstreamAnchor);
-  const downstreamCard = makeCard({ anchor: downstreamAnchor });
-
-  const nucleusAnchor = new THREE.Object3D();
-  nucleusAnchor.position.set(centerX, -4.75, 0);
-  scene.add(nucleusAnchor);
-  const nucleusLabel = makeLabel('', { anchor: nucleusAnchor, sub: true });
-
-  return {
-    centerX, receptor, ac, gprotein, ligand, campDots, nucleusGrp, nucleusMat, dna,
-    xLabel, headerLabel, subLabel, downstreamAnchor, downstreamCard, nucleusLabel,
-  };
+const N_MOLECULES = 6;
+const converters = [];
+for (let i = 0; i < N_MOLECULES; i++) {
+  converters.push({ atp: buildATP(), camp: buildCAMP(), phase: i / N_MOLECULES, lane: (Math.random() - 0.5) * 1.6, driftSeed: Math.random() * 10 });
 }
 
-const panelNormal = buildPanel(PANEL_X.normal);
-const panelFibrotic = buildPanel(PANEL_X.fibrotic);
-const panelTreated = buildPanel(PANEL_X.treated);
+const N_CLOUD = 40;
+const cloudParticles = [];
+const cloudMat = new THREE.MeshStandardMaterial({ color: COL.camp, emissive: 0x442e00, emissiveIntensity: 0.5 });
+const cloudGeo = new THREE.SphereGeometry(0.09, 8, 8);
+for (let i = 0; i < N_CLOUD; i++) {
+  const m = new THREE.Mesh(cloudGeo, cloudMat);
+  mainGroup.add(m);
+  cloudParticles.push({
+    mesh: m,
+    basePos: new THREE.Vector3(lerp(-3.5, 5.0, Math.random()), lerp(-4.4, -1.7, Math.random()), lerp(-2.0, 2.0, Math.random())),
+    seed: Math.random() * 20,
+    order: i / N_CLOUD,
+  });
+}
 
-// PPARbeta branch — parallel pathway shown only for the treprostinil panel
+const nucleusPos = new THREE.Vector3(0.3, -5.6, 0);
+const nucleusMat = new THREE.MeshPhysicalMaterial({ color: 0x2c3a55, transparent: true, opacity: 0.35, roughness: 0.4 });
+const nucleusShell = new THREE.Mesh(new THREE.SphereGeometry(1.3, 20, 20), nucleusMat);
+nucleusShell.position.copy(nucleusPos);
+mainGroup.add(nucleusShell);
+const dna = buildDNAHelix(mainGroup);
+dna.position.copy(nucleusPos);
+dna.scale.setScalar(1.2);
+
+const nucleusAnchor = new THREE.Object3D();
+nucleusAnchor.position.set(nucleusPos.x, nucleusPos.y - 1.75, nucleusPos.z);
+scene.add(nucleusAnchor);
+const nucleusLabel = makeLabel('', { anchor: nucleusAnchor, sub: true });
+
+const downstreamAnchor = new THREE.Object3D();
+downstreamAnchor.position.set(ac.position.x + 1.6, -2.6, 1.7);
+scene.add(downstreamAnchor);
+const downstreamCard = makeCard({ anchor: downstreamAnchor });
+
+// Red X — blocked pathway (fibrotic act)
+const xAnchor = new THREE.Object3D();
+xAnchor.position.set(0.0, 0.25, 1.3);
+scene.add(xAnchor);
+const xLabel = makeLabel('✕', { anchor: xAnchor });
+xLabel.el.classList.add('xmark');
+
+// PPARbeta branch — parallel pathway shown only once treprostinil restores signaling
 const pparGroup = new THREE.Group();
-pparGroup.position.set(panelTreated.centerX + 3.6, -1.7, 0);
-statesGroup.add(pparGroup);
+pparGroup.position.set(ac.position.x + 3.6, -1.9, 0);
+mainGroup.add(pparGroup);
 const pparAMat = new THREE.MeshStandardMaterial({ color: 0xd8a3e0, roughness: 0.35 });
 const pparBMat = new THREE.MeshStandardMaterial({ color: 0x8fd0e0, roughness: 0.35 });
 const pparA = new THREE.Mesh(new THREE.SphereGeometry(0.34, 16, 16), pparAMat);
 const pparB = new THREE.Mesh(new THREE.SphereGeometry(0.28, 16, 16), pparBMat);
 pparB.position.set(0.48, 0.02, 0);
 pparGroup.add(pparA, pparB);
-
 const pparArrowMat = new THREE.MeshBasicMaterial({ color: 0xd8a3e0, transparent: true, opacity: 0.5 });
 const pparArrow1 = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 2.1, 6), pparArrowMat);
-pparArrow1.position.set(panelTreated.centerX + 2.5, -0.7, 0);
+pparArrow1.position.set(ac.position.x + 2.5, -0.9, 0);
 pparArrow1.rotation.z = -0.72;
-statesGroup.add(pparArrow1);
-const pparArrow2 = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 1.7, 6), pparArrowMat);
-pparArrow2.position.set(panelTreated.centerX + 3.6, -3.0, 0);
-statesGroup.add(pparArrow2);
-
+mainGroup.add(pparArrow1);
+const pparArrow2 = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 1.9, 6), pparArrowMat);
+pparArrow2.position.set(ac.position.x + 3.6, -3.2, 0);
+mainGroup.add(pparArrow2);
 const pparLabelAnchor = new THREE.Object3D();
-pparLabelAnchor.position.set(pparGroup.position.x, -0.95, 0);
+pparLabelAnchor.position.set(pparGroup.position.x, -1.15, 0);
 scene.add(pparLabelAnchor);
 const pparLabel = makeLabel('PPARβ activation ?', { anchor: pparLabelAnchor, sub: true, color: '#e0c3ee' });
-
 const pparCardAnchor = new THREE.Object3D();
-pparCardAnchor.position.set(pparGroup.position.x, -4.15, 0);
+pparCardAnchor.position.set(pparGroup.position.x, -4.3, 0);
 scene.add(pparCardAnchor);
 const pparCard = makeCard({ anchor: pparCardAnchor });
 
-const PANEL_CONFIG = {
-  normal: {
-    panel: panelNormal,
-    header: '1. NORMAL STATE', headerColor: '#7fe0a0', sub: 'Functional cAMP signaling',
-    grayReceptor: false, glow: 1, gSplit: 1,
-    ligandVisible: true, ligandColor: 0xd6dde2,
-    campCount: 8, xVisible: false,
-    downstreamTitle: 'DOWNSTREAM EFFECTS',
-    downstreamLines: ['Vasodilation', 'Antiproliferation', 'Anti-inflammation'],
-    nucleusText: 'Gene transcription — active',
-  },
-  fibrotic: {
-    panel: panelFibrotic,
-    header: '2. FIBROTIC STATE', headerColor: '#ff9a8a', sub: 'Disrupted / downregulated cAMP pathway',
-    grayReceptor: true, glow: 0.06, gSplit: 0.05,
-    ligandVisible: false, ligandColor: 0xffffff,
-    campCount: 2, xVisible: true,
-    downstreamTitle: 'DOWNSTREAM EFFECTS (DOWNREGULATED)',
-    downstreamLines: ['↓ Vasodilation', '↓ Antiproliferation', '↓ Anti-inflammation'],
-    nucleusText: 'Gene transcription — reduced',
-  },
-  treated: {
-    panel: panelTreated,
-    header: '3. WITH TREPROSTINIL', headerColor: '#7fd7e8', sub: 'Restored / rebalanced signaling',
-    grayReceptor: false, glow: 1, gSplit: 1,
-    ligandVisible: true, ligandColor: PANEL_COL.treprostinil,
-    campCount: 8, xVisible: false,
-    downstreamTitle: 'DOWNSTREAM EFFECTS (RESTORED)',
-    downstreamLines: ['↑ Vasodilation', '↑ Antiproliferation', '↑ Anti-inflammation'],
-    nucleusText: 'Gene transcription — restored',
-  },
-};
-const grayColor = new THREE.Color(0x555a66);
+// Persistent state header (top of frame)
+const headerAnchor = new THREE.Object3D();
+headerAnchor.position.set(0.3, 3.1, 0);
+scene.add(headerAnchor);
+const headerLabel = makeLabel('', { anchor: headerAnchor });
+headerLabel.el.classList.add('panel-header');
+const subAnchor = new THREE.Object3D();
+subAnchor.position.set(0.3, 2.68, 0);
+scene.add(subAnchor);
+const subLabel = makeLabel('', { anchor: subAnchor });
+subLabel.el.classList.add('panel-sub');
 
 // ---------------------------------------------------------------------
-// Camera rig — deterministic keyframes per stage
+// Camera rig
 // ---------------------------------------------------------------------
 const camPos = new THREE.Vector3();
 const camTarget = new THREE.Vector3();
 const P = {
-  intro:  { pos: new THREE.Vector3(0.5, 1.6, 13.5), look: new THREE.Vector3(0, 0.3, 0) },
-  wide:   { pos: new THREE.Vector3(0, 0.8, 12.5), look: new THREE.Vector3(0, -0.2, 0) },
-  bind:   { pos: new THREE.Vector3(-1.9, 1.6, 10.5), look: new THREE.Vector3(-1.9, 0.6, 0) },
-  gprot:  { pos: new THREE.Vector3(-1.9, -0.4, 10.5), look: new THREE.Vector3(-1.9, -1.1, 0) },
-  acview: { pos: new THREE.Vector3(4.2, -0.2, 9.5), look: new THREE.Vector3(4.6, -1.0, 0) },
-  react:  { pos: new THREE.Vector3(4.6, -2.4, 8.5), look: new THREE.Vector3(4.6, -2.6, 0) },
-  cloud:  { pos: new THREE.Vector3(1.0, -3.6, 11.0), look: new THREE.Vector3(1.0, -3.6, 0) },
-  fibro:  { pos: new THREE.Vector3(1.0, -5.8, 9.0), look: new THREE.Vector3(1.0, -6.5, 0) },
-  fibro2: { pos: new THREE.Vector3(1.8, -6.0, 7.5), look: new THREE.Vector3(1.0, -6.5, 0) },
-  stNormal:   { pos: new THREE.Vector3(PANEL_X.normal, -0.6, 11.5), look: new THREE.Vector3(PANEL_X.normal, -0.9, 0) },
-  stFibrotic: { pos: new THREE.Vector3(PANEL_X.fibrotic, -0.6, 11.5), look: new THREE.Vector3(PANEL_X.fibrotic, -0.9, 0) },
-  stTreated:  { pos: new THREE.Vector3(PANEL_X.treated + 1.6, -1.2, 13.5), look: new THREE.Vector3(PANEL_X.treated + 1.3, -1.3, 0) },
-  stWide:     { pos: new THREE.Vector3(0, -1.0, 42.0), look: new THREE.Vector3(0, -1.0, 0) },
+  wide:    { pos: new THREE.Vector3(0.2, 0.6, 12.5), look: new THREE.Vector3(0.2, -0.3, 0) },
+  bind:    { pos: new THREE.Vector3(-2.0, 1.3, 9.0), look: new THREE.Vector3(-2.0, 0.5, 0) },
+  gprot:   { pos: new THREE.Vector3(-1.0, -0.5, 9.0), look: new THREE.Vector3(-1.0, -1.1, 0) },
+  ac:      { pos: new THREE.Vector3(2.4, -0.1, 8.5), look: new THREE.Vector3(2.4, -1.0, 0) },
+  react:   { pos: new THREE.Vector3(1.0, -2.2, 8.5), look: new THREE.Vector3(1.0, -2.4, 0) },
+  cloud:   { pos: new THREE.Vector3(0.3, -3.4, 10.0), look: new THREE.Vector3(0.3, -3.4, 0) },
+  nucleus: { pos: new THREE.Vector3(0.2, -5.6, 8.5), look: new THREE.Vector3(0.3, -5.6, 0) },
+  blocked: { pos: new THREE.Vector3(0.2, 0.3, 10.0), look: new THREE.Vector3(0.2, -0.3, 0) },
+  treatedWide: { pos: new THREE.Vector3(2.6, -2.3, 14.5), look: new THREE.Vector3(1.3, -2.6, 0) },
 };
 
+// Camera timeline: ordered list of [tEnd, fromKey, toKey, easeStart]
+const CAM_TIMELINE = [
+  [4.0, 'wide', 'wide'],
+  [9.0, 'wide', 'bind'],
+  [14.0, 'bind', 'gprot'],
+  [18.0, 'gprot', 'ac'],
+  [27.0, 'ac', 'react'],
+  [28.5, 'react', 'cloud'],
+  [30.0, 'cloud', 'nucleus'],
+  [34.0, 'nucleus', 'blocked'],
+  [45.0, 'blocked', 'blocked'],
+  [51.0, 'blocked', 'bind'],
+  [56.0, 'bind', 'gprot'],
+  [60.0, 'gprot', 'ac'],
+  [65.0, 'ac', 'react'],
+  [68.0, 'react', 'treatedWide'],
+  [72.0, 'treatedWide', 'treatedWide'],
+];
+function cameraForTime(t) {
+  let segStart = 0;
+  for (const [tEnd, fromKey, toKey] of CAM_TIMELINE) {
+    if (t <= tEnd) {
+      const mix = smoothstep((t - segStart) / Math.max(0.001, tEnd - segStart));
+      return { a: P[fromKey], b: P[toKey], mix };
+    }
+    segStart = tEnd;
+  }
+  const last = CAM_TIMELINE[CAM_TIMELINE.length - 1];
+  return { a: P[last[2]], b: P[last[2]], mix: 0 };
+}
+
 // ---------------------------------------------------------------------
-// Main deterministic update — called with an absolute time in seconds
+// Curves driving the pathway's visual state over the whole story
+// ---------------------------------------------------------------------
+const pathwayActivity = (t) => sampleCurve(t, [[3, 0.12], [14, 1], [30, 1], [34, 0.05], [51, 0.05], [56, 1], [72, 1]]);
+const campLevel = (t) => sampleCurve(t, [[18, 0], [27, 1], [33, 0.06], [60, 0.06], [67, 1], [72, 1]]);
+const grayReceptor = (t) => sampleCurve(t, [[3, 0], [30, 0], [34, 1], [51, 1], [56, 0], [72, 0]]);
+const xOpacity = (t) => sampleCurve(t, [[30, 0], [34, 1], [48, 1], [52, 0]]);
+const pparOpacity = (t) => sampleCurve(t, [[63, 0], [67, 1], [72, 1]]);
+const convActive = (t) => (t >= 17 && t < 30.5) || (t >= 59.5 && t < 68);
+
+// ---------------------------------------------------------------------
+// Caption track
+// ---------------------------------------------------------------------
+const CAPTIONS = [
+  [4, 9, 'A ligand binds the prostanoid receptor', 'G protein-coupled receptor on the cell membrane'],
+  [9, 14, 'The Gs protein is activated', 'Gα dissociates from Gβγ and moves to adenylate cyclase'],
+  [14, 18, 'Adenylate cyclase is activated', 'Gα-GTP binds and activates the enzyme'],
+  [18, 27, 'ATP is converted into cAMP', 'Adenylate cyclase catalyzes cyclic AMP formation'],
+  [27, 30, 'cAMP rises — downstream effects follow', 'Vasodilation, antiproliferation, anti-inflammation'],
+  [30, 34, 'In fibrotic disease, the receptor is downregulated', 'Signaling through this pathway weakens'],
+  [34, 48, 'Adenylate cyclase becomes dysfunctional', 'cAMP production collapses and downstream effects are lost'],
+  [45, 51, 'Treprostinil binds the receptor', 'Restoring receptor engagement'],
+  [51, 56, 'The Gs protein is reactivated', ''],
+  [56, 60, 'Adenylate cyclase is reactivated', ''],
+  [60, 65, 'cAMP production resumes', ''],
+  [65, 68, 'A parallel PPARβ pathway may also contribute', 'Hypothesized mechanism'],
+];
+function updateCaptionTrack(t) {
+  const entry = CAPTIONS.find(([a, b]) => t >= a && t < b);
+  if (entry) {
+    const [a, b, title, sub] = entry;
+    setCaption(title, sub, smoothstep((t - a) / 1.0) * smoothstep((b - t) / 0.6));
+  } else {
+    setCaption('', '', 0);
+  }
+}
+
+// ---------------------------------------------------------------------
+// Main deterministic update
 // ---------------------------------------------------------------------
 function setSceneTime(t) {
   t = Math.max(0, Math.min(t, TOTAL_DURATION));
 
-  // ---- title cards ----
-  const pTitle = progress('title', t);
+  // ---- title card ----
   let titleOpacity = 0;
   if (t < STAGES.title[1]) {
-    titlecardH1.textContent = 'Mechanism of Action';
-    titlecardH2.textContent = 'EP2 / IP / DP1 receptor agonism';
-    titleOpacity = smoothstep(Math.min(pTitle * 3, 1)) * (t > STAGES.title[1] - 0.6 ? smoothstep((STAGES.title[1] - t) / 0.6) : 1);
-  } else if (t >= STAGES.statesTitle[0] && t < STAGES.statesTitle[1]) {
     titlecardH1.textContent = 'Three Cellular States';
-    titlecardH2.textContent = 'Normal vs. fibrotic vs. with treprostinil';
-    const pST = progress('statesTitle', t);
-    titleOpacity = smoothstep(Math.min(pST * 3, 1)) * (t > STAGES.statesTitle[1] - 0.6 ? smoothstep((STAGES.statesTitle[1] - t) / 0.6) : 1);
+    titlecardH2.textContent = 'Normal → fibrotic → with treprostinil';
+    const p = clamp01(t / STAGES.title[1]);
+    titleOpacity = smoothstep(Math.min(p * 3, 1)) * (t > STAGES.title[1] - 0.6 ? smoothstep((STAGES.title[1] - t) / 0.6) : 1);
   }
   titlecard.style.opacity = String(titleOpacity);
 
   // ---- outro card ----
-  const outroOpacity = atOrAfter('outro', t) ? smoothstep(progress('outro', t) * 4) : 0;
+  const outroOpacity = t >= STAGES.outro[0] ? smoothstep((t - STAGES.outro[0]) / (STAGES.outro[1] - STAGES.outro[0]) * 4) : 0;
   outroEl.style.opacity = String(outroOpacity);
-
-  // ---- section visibility ----
-  mainGroup.visible = t < STAGES.statesTitle[0];
-  statesGroup.visible = t >= STAGES.statesTitle[0] && t < STAGES.outro[0];
-  const inStatesSection = statesGroup.visible;
+  mainGroup.visible = outroOpacity < 0.98;
 
   // ---- camera ----
-  let camA = P.intro, camB = P.intro, mix = 0;
-  if (t < STAGES.binding[0]) {
-    camA = P.intro; camB = P.wide; mix = smoothstep(pTitle);
-  } else if (t < STAGES.gprotein[0]) {
-    camA = P.wide; camB = P.bind; mix = smoothstep(progress('binding', t));
-  } else if (t < STAGES.ac[0]) {
-    camA = P.bind; camB = P.gprot; mix = smoothstep(progress('gprotein', t));
-  } else if (t < STAGES.atpcamp[0]) {
-    camA = P.gprot; camB = P.acview; mix = smoothstep(progress('ac', t));
-  } else if (t < STAGES.campaccum[0]) {
-    camA = P.acview; camB = P.react; mix = smoothstep(progress('atpcamp', t));
-  } else if (t < STAGES.antifibrotic[0]) {
-    camA = P.react; camB = P.cloud; mix = smoothstep(progress('campaccum', t));
-  } else if (t < STAGES.statesTitle[0]) {
-    const p = progress('antifibrotic', t);
-    if (p < 0.5) { camA = P.cloud; camB = P.fibro; mix = smoothstep(p * 2); }
-    else { camA = P.fibro; camB = P.fibro2; mix = smoothstep((p - 0.5) * 2); }
-  } else if (t < STAGES.stateNormal[0]) {
-    camA = P.fibro2; camB = P.stNormal; mix = smoothstep(progress('statesTitle', t));
-  } else if (t < STAGES.stateFibrotic[0]) {
-    camA = P.stNormal; camB = P.stNormal; mix = 0;
-  } else if (t < STAGES.stateTreated[0]) {
-    camA = P.stNormal; camB = P.stFibrotic; mix = smoothstep(progress('stateFibrotic', t) * 1.4);
-  } else if (t < STAGES.statesWide[0]) {
-    camA = P.stFibrotic; camB = P.stTreated; mix = smoothstep(progress('stateTreated', t) * 1.4);
-  } else if (t < STAGES.outro[0]) {
-    camA = P.stTreated; camB = P.stWide; mix = smoothstep(progress('statesWide', t));
-  } else {
-    camA = P.stWide; camB = P.stWide; mix = 0;
-  }
-  lerpV3(camPos, camA.pos, camB.pos, mix);
-  lerpV3(camTarget, camA.look, camB.look, mix);
+  const { a, b, mix } = cameraForTime(t);
+  lerpV3(camPos, a.pos, b.pos, mix);
+  lerpV3(camTarget, a.look, b.look, mix);
   camera.position.copy(camPos);
   camera.lookAt(camTarget);
 
   // ---- zone tags ----
-  const zoneOpacity = (t > 3.0 && t < STAGES.antifibrotic[0] + 0.8) ? 1 : (t <= 3.0 ? smoothstep((t - 2.4) / 0.6) : smoothstep((STAGES.antifibrotic[0] + 1.6 - t) / 0.8));
+  const zoneOpacity = t < 3 ? 0 : (t < 3.6 ? smoothstep((t - 3) / 0.6) : (t > STAGES.outro[0] - 1 ? smoothstep((STAGES.outro[0] - t) / 1) : 1));
   tagExtra.style.opacity = String(clamp01(zoneOpacity));
   tagCyto.style.opacity = String(clamp01(zoneOpacity));
 
-  // ---- receptor bundle glow ----
-  for (const r of receptors) {
-    const bp = progress('binding', t);
-    const localP = clamp01((bp - r.delay) / (1 - r.delay));
-    const dockT = smoothstep(Math.min(localP * 1.6, 1));
-    lerpV3(r.ligand.position, r.startPos, r.dockPos, dockT);
-    r.ligand.material.opacity = 1;
-    r.ligand.visible = t >= STAGES.binding[0] - 0.2 && t < STAGES.antifibrotic[0];
-
-    const bound = t >= STAGES.binding[0] + r.delay * 3 + 1.6;
-    const activation = bound ? clamp01((t - (STAGES.binding[0] + r.delay * 3 + 1.6)) / 1.2) : 0;
-    r.g.userData.mat.emissive.copy(r.g.userData.baseColor).multiplyScalar(0.55 * activation);
-    r.g.userData.mat.emissiveIntensity = 1;
-
-    updateLabel(r.label, t > STAGES.binding[0] - 0.5 && t < STAGES.antifibrotic[0] + 1.5 ? 1 : 0);
-  }
-  updateLabel(acLabel, t > STAGES.ac[0] - 1 && t < STAGES.antifibrotic[0] + 1.5 ? 1 : 0);
-
-  // ---- G protein: assemble under receptor, split, Galpha travels to AC ----
-  for (const r of receptors) {
-    const startT = STAGES.gprotein[0] + r.delay;
-    const gp = clamp01((t - startT) / 5.2);
-    const assemble = smoothstep(Math.min(gp * 3, 1));
-    r.gprotein.position.copy(r.gDockPos);
-    r.gprotein.scale.setScalar(lerp(0.001, 1, assemble));
-
-    const split = smoothstep(clamp01((gp - 0.4) / 0.3));
-    r.gprotein.userData.bg.position.x = lerp(0, -0.55, split);
-
-    const travel = smoothstep(clamp01((gp - 0.55) / 0.45));
-    const alphaTarget = acActiveSite.clone().add(new THREE.Vector3(0, 0.4 + 0.15 * Math.sin(r.delay * 10), (r.delay - 0.35) * 0.6));
-    const alphaPos = new THREE.Vector3();
-    lerpV3(alphaPos, r.gDockPos, alphaTarget, travel);
-    r.gprotein.userData.alpha.position.copy(alphaPos).sub(r.gprotein.position);
-
-    r.gprotein.visible = t >= startT - 0.1 && t < STAGES.campaccum[0] + 1.5;
-    r.gprotein.userData.bg.visible = travel < 0.98;
-  }
-
-  // ---- adenylate cyclase activation glow ----
-  const acp = progress('ac', t);
-  const acGlow = smoothstep(acp) * (1 - (t > STAGES.campaccum[0] ? clamp01((t - STAGES.campaccum[0]) / 3) * 0.4 : 0));
-  ac.userData.mat.emissive.set(0xff8a3d).multiplyScalar(0.6 * clamp01(acGlow + (atOrAfter('ac', t) ? 0.35 : 0)));
-
-  // ---- ATP -> cAMP conversion loop at active site ----
-  const convActive = t >= STAGES.atpcamp[0] - 0.5 && t < STAGES.antifibrotic[0];
-  const cycleLen = 2.6;
-  for (const c of converters) {
-    if (!convActive) { c.atp.visible = false; c.camp.visible = false; continue; }
-    const localT = ((t - STAGES.atpcamp[0]) / cycleLen + c.phase) % 1;
-    const risingFromCyto = localT < 0.35;
-    const atStage = localT >= 0.35 && localT < 0.55;
-    const leaving = localT >= 0.55;
-
-    c.atp.visible = risingFromCyto || atStage;
-    c.camp.visible = leaving;
-
-    if (risingFromCyto) {
-      const lp = localT / 0.35;
-      const from = new THREE.Vector3(acActiveSite.x + c.lane, -4.4, (c.lane) * 0.6);
-      const to = acActiveSite.clone().add(new THREE.Vector3(c.lane * 0.3, 0, 0));
-      lerpV3(c.atp.position, from, to, smoothstep(lp));
-      c.atp.scale.setScalar(1);
-    } else if (atStage) {
-      const lp = (localT - 0.35) / 0.2;
-      c.atp.position.copy(acActiveSite).add(new THREE.Vector3(c.lane * 0.3, 0, 0));
-      c.atp.scale.setScalar(1 - 0.3 * smoothstep(lp));
-    }
-    if (leaving) {
-      const lp = (localT - 0.55) / 0.45;
-      const from = acActiveSite.clone().add(new THREE.Vector3(c.lane * 0.3, 0, 0));
-      const to = new THREE.Vector3(acActiveSite.x + c.lane * 2.2, -4.6 - lp * 1.2, c.lane * 1.4);
-      lerpV3(c.camp.position, from, to, smoothstep(lp));
-      c.camp.rotation.y = t * 1.5 + c.driftSeed;
-      c.camp.material && (c.camp.children[0].material.opacity = 1);
-    }
-  }
-
-  // ---- cAMP concentration meter ----
-  const meterActive = t >= STAGES.atpcamp[0] && t < STAGES.statesTitle[0];
-  const level = meterActive ? clamp01((t - STAGES.atpcamp[0]) / (STAGES.campaccum[1] - STAGES.atpcamp[0])) : 0;
-  const meterFadeOut = atOrAfter('outro', t) ? 0 : 1;
-  meterEl.style.opacity = String(meterActive ? meterFadeOut : 0);
-  meterLabel.style.opacity = meterEl.style.opacity;
-  meterFill.style.height = (level * 100).toFixed(1) + '%';
-
-  // ---- cAMP cloud accumulation in cytoplasm ----
-  const cloudStart = STAGES.campaccum[0] - 1.0;
-  for (const p of cloudParticles) {
-    const appear = clamp01((t - (cloudStart + p.order * 4.5)) / 1.2);
-    p.mesh.visible = appear > 0.01 && t < STAGES.antifibrotic[1] - 0.5;
-    const bob = Math.sin(t * 1.3 + p.seed) * 0.08;
-    p.mesh.position.set(p.basePos.x, p.basePos.y + bob, p.basePos.z);
-    p.mesh.scale.setScalar(0.4 + 0.6 * smoothstep(appear));
-  }
-
-  // ---- fibroblast morph: activated (spiky) -> quiescent (smooth) ----
-  const fp = progress('antifibrotic', t);
-  const morph = smoothstep(clamp01((fp - 0.15) / 0.7));
-  const posAttr = fibroMesh.geometry.attributes.position;
-  for (let i = 0; i < vertCount; i++) {
-    const nx = fibroNormals.getX(i), ny = fibroNormals.getY(i), nz = fibroNormals.getZ(i);
-    const spike = lerp(spikeNoise[i], 0.02, morph);
-    posAttr.setXYZ(i, nx * (1 + spike), ny * (1 + spike), nz * (1 + spike));
-  }
-  posAttr.needsUpdate = true;
-  fibroMesh.geometry.computeVertexNormals();
-  fibroMat.color.set(COL.fibroblastActive).lerp(new THREE.Color(COL.fibroblastQuiet), morph);
-  fibroMesh.visible = t >= STAGES.campaccum[0] - 0.5 && t < STAGES.statesTitle[0];
-  nucleusMesh.visible = fibroMesh.visible;
-
-  for (const cf of collagenFibers) {
-    cf.mesh.visible = fibroMesh.visible;
-    cf.mesh.scale.setScalar(lerp(1, 0.15, morph));
-  }
-
-  updateLabel(fibroLabel, fibroMesh.visible ? 1 : 0);
-  fibroSubLabel.el.textContent = morph > 0.5 ? 'quiescent' : 'activated';
-  fibroSubLabel.el.style.color = morph > 0.5 ? '#bdf2c9' : '#ffb3a3';
-  updateLabel(fibroSubLabel, fibroMesh.visible ? 1 : 0);
-
-  // ---- three state panels ----
-  const panelOpac = inStatesSection ? 1 : 0;
-  const cardOpac = !inStatesSection ? 0 : (inStage('statesWide', t) ? clamp01(1 - progress('statesWide', t) * 3) : 1);
-  for (const key of ['normal', 'fibrotic', 'treated']) {
-    const cfg = PANEL_CONFIG[key];
-    const p = cfg.panel;
-    const bob = Math.sin(t * 1.1 + p.centerX) * 0.05;
-
-    p.receptor.userData.mat.color.copy(p.receptor.userData.baseColor).lerp(grayColor, cfg.grayReceptor ? 0.75 : 0);
-    p.receptor.userData.mat.emissive.copy(p.receptor.userData.baseColor).multiplyScalar(0.5 * cfg.glow);
-    p.ac.userData.mat.emissive.copy(p.ac.userData.baseColor).multiplyScalar(0.5 * cfg.glow);
-
-    p.gprotein.userData.bg.position.x = lerp(0, -0.55, cfg.gSplit);
-    p.gprotein.userData.alphaMat.emissive.set(COL.galpha).multiplyScalar(0.4 * cfg.glow);
-
-    p.ligand.visible = cfg.ligandVisible;
-    p.ligand.material.color.set(cfg.ligandColor);
-    p.ligand.material.emissive.set(cfg.ligandColor).multiplyScalar(0.35);
-    p.ligand.position.y = 1.35 + bob;
-
-    for (let i = 0; i < p.campDots.length; i++) {
-      const dot = p.campDots[i];
-      const on = i < cfg.campCount;
-      dot.visible = on;
-      if (on) {
-        dot.position.y = dot.userData.basePos.y + Math.sin(t * 1.4 + dot.userData.seed) * 0.09;
-        dot.rotation.y = t * 1.2 + dot.userData.seed;
-      }
-    }
-
-    p.nucleusMat.opacity = 0.2 + 0.25 * cfg.glow;
-    p.dna.rotation.y = t * 0.25;
-    for (const m of p.dna.userData.mats) {
-      m.emissive.copy(m.color).multiplyScalar(0.25 * cfg.glow);
-    }
-
-    p.headerLabel.el.textContent = cfg.header;
-    p.headerLabel.el.style.color = cfg.headerColor;
-    updateLabel(p.headerLabel, panelOpac);
-    p.subLabel.el.textContent = cfg.sub;
-    updateLabel(p.subLabel, panelOpac);
-    updateLabel(p.xLabel, cfg.xVisible ? panelOpac : 0);
-    updateCard(p.downstreamCard, cfg.downstreamTitle, cfg.downstreamLines, cardOpac);
-    p.nucleusLabel.el.textContent = cfg.nucleusText;
-    updateLabel(p.nucleusLabel, panelOpac);
-  }
-  updateLabel(pparLabel, cardOpac);
-  updateCard(pparCard, 'TARGET GENE REGULATION', [
-    '↓ Fibroblast proliferation', '↓ Profibrotic gene expression', '↓ ECM synthesis', '↓ Pulmonary inflammation / fibrosis',
-  ], cardOpac);
-  pparArrowMat.opacity = 0.5 * cardOpac;
-
-  // ---- legend (states comparison) ----
-  const legendOpacity = inStage('statesWide', t) ? smoothstep(progress('statesWide', t) * 3) : 0;
+  // ---- legend (brief, during the intro) ----
+  const legendOpacity = sampleCurve(t, [[3.5, 0], [5, 1], [8, 1], [9.5, 0]]);
   legendEl.style.opacity = String(legendOpacity);
 
-  // ---- caption track ----
-  if (inStage('binding', t)) {
-    setCaption('Drug binds EP2, IP and DP1 receptors', 'G protein-coupled receptors on the cell membrane', smoothstep(progress('binding', t) * 4));
-  } else if (inStage('gprotein', t)) {
-    setCaption('Receptor activation triggers the Gs protein', 'The G&alpha; subunit dissociates from G&beta;&gamma;', smoothstep(progress('gprotein', t) * 4));
-  } else if (inStage('ac', t)) {
-    setCaption('Adenylate cyclase is activated', 'G&alpha;-GTP binds and activates the enzyme', smoothstep(progress('ac', t) * 4));
-  } else if (inStage('atpcamp', t)) {
-    setCaption('ATP is converted into cAMP', 'Adenylate cyclase catalyzes cyclic AMP formation', smoothstep(progress('atpcamp', t) * 4));
-  } else if (inStage('campaccum', t)) {
-    setCaption('Intracellular cAMP concentration rises', '', smoothstep(progress('campaccum', t) * 4));
-  } else if (inStage('antifibrotic', t)) {
-    setCaption('Antifibrotic effect', 'Reduced fibroblast activation and collagen deposition', smoothstep(progress('antifibrotic', t) * 4));
-  } else if (inStage('stateNormal', t)) {
-    setCaption('Normal state — functional cAMP signaling', 'Receptor, Gs protein and adenylate cyclase operate normally', smoothstep(progress('stateNormal', t) * 4));
-  } else if (inStage('stateFibrotic', t)) {
-    setCaption('Fibrotic state — disrupted cAMP pathway', 'Receptor downregulation and adenylate cyclase dysfunction reduce cAMP', smoothstep(progress('stateFibrotic', t) * 4));
-  } else if (inStage('stateTreated', t)) {
-    setCaption('With treprostinil — signaling restored', 'Receptor agonism reactivates the Gs / adenylate cyclase / cAMP pathway', smoothstep(progress('stateTreated', t) * 4));
-  } else if (inStage('statesWide', t)) {
-    setCaption('Comparing the three states', '', smoothstep(progress('statesWide', t) * 4));
+  // ---- header ----
+  let headerText, headerColor, subText;
+  if (t < STAGES.fibrotic[0]) { headerText = '1. NORMAL STATE'; headerColor = '#7fe0a0'; subText = 'Functional cAMP signaling'; }
+  else if (t < STAGES.treated[0]) { headerText = '2. FIBROTIC STATE'; headerColor = '#ff9a8a'; subText = 'Disrupted / downregulated cAMP pathway'; }
+  else { headerText = '3. WITH TREPROSTINIL'; headerColor = '#7fd7e8'; subText = 'Restored / rebalanced signaling'; }
+  headerLabel.el.textContent = headerText;
+  headerLabel.el.style.color = headerColor;
+  subLabel.el.textContent = subText;
+  const headerOpacity = sampleCurve(t, [[3, 0], [3.8, 1]]);
+  updateLabel(headerLabel, headerOpacity);
+  updateLabel(subLabel, headerOpacity);
+
+  // ---- receptor / AC glow ----
+  const activity = pathwayActivity(t);
+  const gray = grayReceptor(t);
+  receptor.userData.mat.color.copy(receptor.userData.baseColor).lerp(grayColor, gray);
+  receptor.userData.mat.emissive.copy(receptor.userData.baseColor).multiplyScalar(0.5 * activity);
+  ac.userData.mat.emissive.copy(ac.userData.baseColor).multiplyScalar(0.5 * activity);
+  updateLabel(receptorLabel, headerOpacity);
+  updateLabel(acLabel, headerOpacity);
+
+  // ---- ligands ----
+  if (t < 4) {
+    ligandNormal.visible = false;
+  } else if (t < STAGES.fibrotic[0]) {
+    ligandNormal.visible = true;
+    lerpV3(ligandNormal.position, ligandStartPos, dockPos, smoothstep((t - 4) / 5));
+  } else if (t < 36) {
+    const leaveT = smoothstep((t - STAGES.fibrotic[0]) / 4);
+    lerpV3(ligandNormal.position, dockPos, ligandExitPos, leaveT);
+    ligandNormal.visible = leaveT < 0.98;
   } else {
-    setCaption('', '', 0);
+    ligandNormal.visible = false;
   }
+  if (t < 45) {
+    ligandTreprostinil.visible = false;
+  } else {
+    ligandTreprostinil.visible = true;
+    lerpV3(ligandTreprostinil.position, ligandStartPos, dockPos, smoothstep((t - 45) / 5));
+  }
+
+  // ---- G protein ----
+  gprotein.position.copy(gDockPos);
+  gprotein.visible = t >= 8;
+  const split = smoothstep((activity - 0.3) / 0.4);
+  gprotein.userData.bg.position.x = lerp(0, -0.55, split);
+  const travel = smoothstep((activity - 0.5) / 0.5);
+  const alphaTarget = acActiveSite.clone().add(new THREE.Vector3(0, 0.4, 0)).sub(gprotein.position);
+  const alphaRest = new THREE.Vector3(0, 0, 0);
+  lerpV3(gprotein.userData.alpha.position, alphaRest, alphaTarget, travel);
+  gprotein.userData.bg.visible = travel < 0.98;
+  gprotein.userData.alphaMat.emissive.set(COL.galpha).multiplyScalar(0.4 * activity);
+
+  // ---- ATP -> cAMP conversion loop ----
+  const cActive = convActive(t);
+  const cycleLen = 2.6;
+  const cycleStartT = t < 40 ? 17 : 59.5;
+  for (const c of converters) {
+    if (!cActive) { c.atp.visible = false; c.camp.visible = false; continue; }
+    const localT = ((t - cycleStartT) / cycleLen + c.phase) % 1;
+    const rising = localT < 0.35, atStage = localT >= 0.35 && localT < 0.55, leaving = localT >= 0.55;
+    c.atp.visible = rising || atStage;
+    c.camp.visible = leaving;
+    if (rising) {
+      const lp = smoothstep(localT / 0.35);
+      const from = new THREE.Vector3(acActiveSite.x + c.lane, -4.2, c.lane * 0.6);
+      const to = acActiveSite.clone().add(new THREE.Vector3(c.lane * 0.3, 0, 0));
+      lerpV3(c.atp.position, from, to, lp);
+    } else if (atStage) {
+      c.atp.position.copy(acActiveSite).add(new THREE.Vector3(c.lane * 0.3, 0, 0));
+      c.atp.scale.setScalar(1 - 0.3 * smoothstep((localT - 0.35) / 0.2));
+    }
+    if (leaving) {
+      const lp = smoothstep((localT - 0.55) / 0.45);
+      const from = acActiveSite.clone().add(new THREE.Vector3(c.lane * 0.3, 0, 0));
+      const to = new THREE.Vector3(acActiveSite.x + c.lane * 2.2, -4.4 - lp * 1.2, c.lane * 1.4);
+      lerpV3(c.camp.position, from, to, lp);
+      c.camp.rotation.y = t * 1.5 + c.driftSeed;
+    }
+  }
+
+  // ---- cAMP meter + cloud ----
+  const level = campLevel(t);
+  meterEl.style.opacity = String(t > 10 && t < STAGES.outro[0] ? 1 : 0);
+  meterLabel.style.opacity = meterEl.style.opacity;
+  meterFill.style.height = (level * 100).toFixed(1) + '%';
+  for (const p of cloudParticles) {
+    const on = level > p.order;
+    p.mesh.visible = on;
+    const bob = Math.sin(t * 1.3 + p.seed) * 0.08;
+    p.mesh.position.set(p.basePos.x, p.basePos.y + bob, p.basePos.z);
+    p.mesh.scale.setScalar(0.4 + 0.6 * smoothstep((level - p.order) / 0.06));
+  }
+
+  // ---- X mark ----
+  updateLabel(xLabel, xOpacity(t));
+
+  // ---- nucleus / DNA ----
+  nucleusMat.opacity = 0.2 + 0.28 * level;
+  dna.rotation.y = t * 0.22;
+  for (const m of dna.userData.mats) m.emissive.copy(m.color).multiplyScalar(0.28 * level);
+  const nucleusText = t < STAGES.fibrotic[0] ? 'Gene transcription — active' : t < 57 ? 'Gene transcription — reduced' : 'Gene transcription — restored';
+  nucleusLabel.el.textContent = nucleusText;
+  updateLabel(nucleusLabel, headerOpacity);
+
+  // ---- downstream effects card ----
+  let dsTitle, dsLines;
+  if (t < STAGES.fibrotic[0]) { dsTitle = 'DOWNSTREAM EFFECTS'; dsLines = ['Vasodilation', 'Antiproliferation', 'Anti-inflammation']; }
+  else if (t < 57) { dsTitle = 'DOWNSTREAM EFFECTS (DOWNREGULATED)'; dsLines = ['↓ Vasodilation', '↓ Antiproliferation', '↓ Anti-inflammation']; }
+  else { dsTitle = 'DOWNSTREAM EFFECTS (RESTORED)'; dsLines = ['↑ Vasodilation', '↑ Antiproliferation', '↑ Anti-inflammation']; }
+  const cardOpacity = sampleCurve(t, [[26, 0], [29, 1]]);
+  updateCard(downstreamCard, dsTitle, dsLines, cardOpacity);
+
+  // ---- PPARbeta branch ----
+  const ppOp = pparOpacity(t);
+  updateLabel(pparLabel, ppOp);
+  updateCard(pparCard, 'TARGET GENE REGULATION', [
+    '↓ Fibroblast proliferation', '↓ Profibrotic gene expression', '↓ ECM synthesis', '↓ Pulmonary inflammation / fibrosis',
+  ], ppOp);
+  pparArrowMat.opacity = 0.5 * ppOp;
+  pparGroup.visible = ppOp > 0.02;
+  pparArrow1.visible = ppOp > 0.02;
+  pparArrow2.visible = ppOp > 0.02;
+
+  // ---- captions ----
+  updateCaptionTrack(t);
 
   renderer.render(scene, camera);
 }
