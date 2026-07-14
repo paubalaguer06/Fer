@@ -200,22 +200,95 @@ function buildGProtein(parent = mainGroup) {
   return g;
 }
 
+// Small ball-and-stick molecule builders (stylized, not to scale) so ATP and
+// cAMP read as actual molecules rather than generic glowing dots.
+function buildBallStickRing(count, radius, atomColor, atomSize = 0.05) {
+  const g = new THREE.Group();
+  const atomMat = new THREE.MeshStandardMaterial({ color: atomColor, roughness: 0.3, metalness: 0.15 });
+  const bondMat = new THREE.MeshStandardMaterial({ color: 0xd8dee8, roughness: 0.55 });
+  const pts = [];
+  for (let i = 0; i < count; i++) {
+    const a = (i / count) * Math.PI * 2;
+    const p = new THREE.Vector3(Math.cos(a) * radius, Math.sin(a) * radius, 0);
+    pts.push(p);
+    const s = new THREE.Mesh(new THREE.SphereGeometry(atomSize, 10, 10), atomMat);
+    s.position.copy(p);
+    g.add(s);
+  }
+  for (let i = 0; i < count; i++) {
+    const a = pts[i], b = pts[(i + 1) % count];
+    const bond = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, a.distanceTo(b), 6), bondMat);
+    bond.position.copy(a.clone().lerp(b, 0.5));
+    bond.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
+    g.add(bond);
+  }
+  g.userData.points = pts;
+  g.userData.atomMat = atomMat;
+  return g;
+}
+function addBond(parent, a, b, mat) {
+  const bond = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, a.distanceTo(b), 6), mat);
+  bond.position.copy(a.clone().lerp(b, 0.5));
+  bond.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
+  parent.add(bond);
+}
+
 function buildATP(parent = mainGroup) {
   const g = new THREE.Group();
-  g.add(new THREE.Mesh(new THREE.SphereGeometry(0.15, 12, 12), new THREE.MeshStandardMaterial({ color: COL.atp })));
+  const bondMat = new THREE.MeshStandardMaterial({ color: 0xd8dee8, roughness: 0.55 });
+  const base = buildBallStickRing(6, 0.13, 0x6f9fe0, 0.05);
+  base.position.set(-0.22, 0.06, 0);
+  g.add(base);
+  const ribose = buildBallStickRing(5, 0.09, 0xece6d6, 0.045);
+  ribose.position.set(0.08, -0.06, 0);
+  g.add(ribose);
+  addBond(g, base.position, ribose.position, bondMat);
+
+  const pMat = new THREE.MeshStandardMaterial({ color: 0xff9a3d, roughness: 0.3 });
+  const oMat = new THREE.MeshStandardMaterial({ color: 0xe0574f, roughness: 0.3 });
+  let prev = ribose.position.clone().add(new THREE.Vector3(0.12, -0.05, 0));
+  addBond(g, ribose.position, prev, bondMat);
   for (let i = 0; i < 3; i++) {
-    const p = new THREE.Mesh(new THREE.SphereGeometry(0.085, 10, 10), new THREE.MeshStandardMaterial({ color: 0xffb14a }));
-    p.position.set(0.2 + i * 0.17, 0.05 * (i % 2 === 0 ? 1 : -1), 0);
-    g.add(p);
+    const p = prev.clone().add(new THREE.Vector3(0.15, 0.06 * (i % 2 === 0 ? 1 : -1), 0));
+    const ps = new THREE.Mesh(new THREE.SphereGeometry(0.07, 12, 12), pMat);
+    ps.position.copy(p);
+    g.add(ps);
+    addBond(g, prev, p, bondMat);
+    for (let k = 0; k < 2; k++) {
+      const oa = (k / 2) * Math.PI * 2 + i;
+      const o = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 8), oMat);
+      o.position.copy(p).add(new THREE.Vector3(Math.cos(oa) * 0.085, Math.sin(oa) * 0.085, (k - 0.5) * 0.07));
+      g.add(o);
+    }
+    prev = p;
   }
+  g.userData.mats = [base.userData.atomMat, ribose.userData.atomMat, pMat, oMat];
   parent.add(g);
   return g;
 }
+
 function buildCAMP(parent = mainGroup) {
   const g = new THREE.Group();
-  const mat = new THREE.MeshStandardMaterial({ color: COL.camp, emissive: 0x442e00, emissiveIntensity: 0.6 });
-  g.add(new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.05, 10, 20), mat));
-  g.userData.mat = mat;
+  const bondMat = new THREE.MeshStandardMaterial({ color: 0xd8dee8, roughness: 0.55 });
+  const base = buildBallStickRing(6, 0.12, 0x6f9fe0, 0.048);
+  base.position.set(-0.2, 0.05, 0);
+  g.add(base);
+  const ribose = buildBallStickRing(5, 0.085, 0xece6d6, 0.042);
+  ribose.position.set(0.08, -0.05, 0);
+  g.add(ribose);
+  addBond(g, base.position, ribose.position, bondMat);
+
+  const pMat = new THREE.MeshStandardMaterial({ color: 0xffd76a, roughness: 0.25, emissive: 0x442e00, emissiveIntensity: 0.5 });
+  const p = ribose.position.clone().add(new THREE.Vector3(0.16, -0.12, 0));
+  const ps = new THREE.Mesh(new THREE.SphereGeometry(0.065, 12, 12), pMat);
+  ps.position.copy(p);
+  g.add(ps);
+  const a1 = ribose.position.clone().add(ribose.userData.points[1]);
+  const a2 = ribose.position.clone().add(ribose.userData.points[2]);
+  addBond(g, a1, p, bondMat);
+  addBond(g, a2, p, bondMat);
+  g.userData.mats = [base.userData.atomMat, ribose.userData.atomMat, pMat];
+  g.userData.mat = pMat;
   parent.add(g);
   return g;
 }
@@ -611,7 +684,7 @@ function setSceneTime(t) {
   nucleusMat.opacity = 0.2 + 0.28 * level;
   dna.rotation.y = t * 0.22;
   for (const m of dna.userData.mats) m.emissive.copy(m.color).multiplyScalar(0.28 * level);
-  const nucleusText = t < STAGES.fibrotic[0] ? 'Gene transcription — active' : t < 59 ? 'Gene transcription — reduced' : 'Gene transcription — increases';
+  const nucleusText = t < STAGES.fibrotic[0] ? 'Antifibrotic effect — active' : t < 59 ? 'Antifibrotic effect — reduced' : 'Antifibrotic effect — increases';
   nucleusLabel.el.textContent = nucleusText;
   updateLabel(nucleusLabel, headerOpacity);
 
