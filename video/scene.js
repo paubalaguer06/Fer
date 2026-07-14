@@ -6,10 +6,10 @@ import * as THREE from 'three';
 export const FPS = 30;
 export const STAGES = {
   title:    [0.0, 3.0],
-  normal:   [3.0, 30.0],
-  fibrotic: [30.0, 45.0],
-  treated:  [45.0, 68.0],
-  outro:    [68.0, 72.0],
+  normal:   [3.0, 32.0],
+  fibrotic: [32.0, 47.0],
+  treated:  [47.0, 70.0],
+  outro:    [70.0, 74.0],
 };
 export const TOTAL_DURATION = STAGES.outro[1];
 window.FPS = FPS;
@@ -144,10 +144,10 @@ const grayColor = new THREE.Color(COL.gray);
 const membraneGroup = new THREE.Group();
 mainGroup.add(membraneGroup);
 const membraneMat = new THREE.MeshPhysicalMaterial({ color: 0x2c7e93, transparent: true, opacity: 0.28, roughness: 0.4, side: THREE.DoubleSide });
-const membraneSlab = new THREE.Mesh(new THREE.BoxGeometry(12, 1.4, 5), membraneMat);
+const membraneSlab = new THREE.Mesh(new THREE.BoxGeometry(15.5, 1.4, 5), membraneMat);
 membraneGroup.add(membraneSlab);
 const leafletMat = new THREE.MeshBasicMaterial({ color: 0x9fe6f2, transparent: true, opacity: 0.22 });
-const leafletTop = new THREE.Mesh(new THREE.PlaneGeometry(12, 5), leafletMat);
+const leafletTop = new THREE.Mesh(new THREE.PlaneGeometry(15.5, 5), leafletMat);
 leafletTop.rotation.x = -Math.PI / 2;
 leafletTop.position.y = 0.72;
 membraneGroup.add(leafletTop);
@@ -255,30 +255,43 @@ function buildDNAHelix(parent, colorA = 0x8fd7ea, colorB = 0x5fa8c9) {
 }
 
 // ---------------------------------------------------------------------
-// The single cell setup — reused across all three acts
+// The cell setup — three prostanoid receptors converging on one adenylate
+// cyclase, reused across all three acts
 // ---------------------------------------------------------------------
-const receptor = buildBundle(-2.0, COL.receptor, 7, 0.38, 2.2);
-const ac = buildBundle(2.0, COL.ac, 9, 0.44, 2.4);
-
-const receptorAnchor = new THREE.Object3D();
-receptorAnchor.position.set(receptor.position.x, 1.7, 0);
-scene.add(receptorAnchor);
-const receptorLabel = makeLabel('Receptor (prostanoid)', { anchor: receptorAnchor, color: '#ffffff' });
+const ac = buildBundle(5.0, COL.ac, 9, 0.44, 2.4);
+const acActiveSite = new THREE.Vector3(ac.position.x - 0.5, -1.3, 0);
 
 const acAnchor = new THREE.Object3D();
 acAnchor.position.set(ac.position.x, 1.8, 0);
 scene.add(acAnchor);
 const acLabel = makeLabel('Adenylate cyclase', { anchor: acAnchor, color: '#ffcaa3' });
 
-const dockPos = new THREE.Vector3(receptor.position.x, 1.15, 0);
-const ligandStartPos = new THREE.Vector3(receptor.position.x + 0.7, 5.5, 0.9);
-const ligandExitPos = new THREE.Vector3(receptor.position.x - 2.2, 4.4, -1.3);
-const ligandNormal = buildLigand(mainGroup, COL.ligand, 0.26);
-const ligandTreprostinil = buildLigand(mainGroup, COL.treprostinil, 0.24);
+const RECEPTOR_DEFS = [
+  { name: 'EP2', x: -5.2, color: 0x5fb8c9, delay: 0.0 },
+  { name: 'IP', x: -1.9, color: 0x6fd0a8, delay: 0.35 },
+  { name: 'DP1', x: 1.4, color: 0xc9a3e0, delay: 0.7 },
+];
 
-const gprotein = buildGProtein();
-const gDockPos = new THREE.Vector3(receptor.position.x - 0.35, -1.4, 0);
-const acActiveSite = new THREE.Vector3(ac.position.x - 0.5, -1.3, 0);
+const receptors = RECEPTOR_DEFS.map((def) => {
+  const g = buildBundle(def.x, def.color, 7, 0.38, 2.2);
+
+  const anchor = new THREE.Object3D();
+  anchor.position.set(def.x, 1.7, 0);
+  scene.add(anchor);
+  const label = makeLabel(def.name, { anchor, color: '#ffffff' });
+
+  const dockPos = new THREE.Vector3(def.x, 1.15, 0);
+  const ligandStartPos = new THREE.Vector3(def.x + 0.6, 5.5, 0.9);
+  const ligandExitPos = new THREE.Vector3(def.x - 1.6, 4.4, -1.3);
+  const ligandNormal = buildLigand(mainGroup, COL.ligand, 0.24);
+  const ligandTreprostinil = buildLigand(mainGroup, COL.treprostinil, 0.22);
+
+  const gprotein = buildGProtein();
+  const gDockPos = new THREE.Vector3(def.x - 0.3, -1.4, 0);
+  const alphaTargetOffset = new THREE.Vector3(0, 0.4 + 0.15 * Math.sin(def.delay * 10), (def.delay - 0.35) * 0.7);
+
+  return { ...def, g, anchor, label, dockPos, ligandStartPos, ligandExitPos, ligandNormal, ligandTreprostinil, gprotein, gDockPos, alphaTargetOffset };
+});
 
 const N_MOLECULES = 6;
 const converters = [];
@@ -322,7 +335,7 @@ const downstreamCard = makeCard({ anchor: downstreamAnchor });
 
 // Red X — blocked pathway (fibrotic act)
 const xAnchor = new THREE.Object3D();
-xAnchor.position.set(0.0, 0.25, 1.3);
+xAnchor.position.set(2.2, 0.25, 1.3);
 scene.add(xAnchor);
 const xLabel = makeLabel('✕', { anchor: xAnchor });
 xLabel.el.classList.add('xmark');
@@ -372,34 +385,34 @@ subLabel.el.classList.add('panel-sub');
 const camPos = new THREE.Vector3();
 const camTarget = new THREE.Vector3();
 const P = {
-  wide:    { pos: new THREE.Vector3(0.2, 0.6, 12.5), look: new THREE.Vector3(0.2, -0.3, 0) },
-  bind:    { pos: new THREE.Vector3(-2.0, 1.3, 9.0), look: new THREE.Vector3(-2.0, 0.5, 0) },
-  gprot:   { pos: new THREE.Vector3(-1.0, -0.5, 9.0), look: new THREE.Vector3(-1.0, -1.1, 0) },
-  ac:      { pos: new THREE.Vector3(2.4, -0.1, 8.5), look: new THREE.Vector3(2.4, -1.0, 0) },
-  react:   { pos: new THREE.Vector3(1.0, -2.2, 8.5), look: new THREE.Vector3(1.0, -2.4, 0) },
-  cloud:   { pos: new THREE.Vector3(0.3, -3.4, 10.0), look: new THREE.Vector3(0.3, -3.4, 0) },
-  nucleus: { pos: new THREE.Vector3(0.2, -5.6, 8.5), look: new THREE.Vector3(0.3, -5.6, 0) },
-  blocked: { pos: new THREE.Vector3(0.2, 0.3, 10.0), look: new THREE.Vector3(0.2, -0.3, 0) },
-  treatedWide: { pos: new THREE.Vector3(2.6, -2.3, 14.5), look: new THREE.Vector3(1.3, -2.6, 0) },
+  wide:    { pos: new THREE.Vector3(0, 0.8, 13.5), look: new THREE.Vector3(0, -0.2, 0) },
+  bind:    { pos: new THREE.Vector3(-1.9, 1.6, 10.5), look: new THREE.Vector3(-1.9, 0.6, 0) },
+  gprot:   { pos: new THREE.Vector3(-1.9, -0.4, 10.5), look: new THREE.Vector3(-1.9, -1.1, 0) },
+  ac:      { pos: new THREE.Vector3(4.2, -0.2, 9.5), look: new THREE.Vector3(4.6, -1.0, 0) },
+  react:   { pos: new THREE.Vector3(4.6, -2.4, 8.5), look: new THREE.Vector3(4.6, -2.6, 0) },
+  cloud:   { pos: new THREE.Vector3(1.0, -3.6, 11.0), look: new THREE.Vector3(1.0, -3.6, 0) },
+  nucleus: { pos: new THREE.Vector3(1.0, -5.6, 9.5), look: new THREE.Vector3(0.8, -5.6, 0) },
+  blocked: { pos: new THREE.Vector3(0.2, 0.4, 13.5), look: new THREE.Vector3(0.2, -0.3, 0) },
+  treatedWide: { pos: new THREE.Vector3(4.5, -2.4, 18.0), look: new THREE.Vector3(3.0, -2.6, 0) },
 };
 
 // Camera timeline: ordered list of [tEnd, fromKey, toKey, easeStart]
 const CAM_TIMELINE = [
   [4.0, 'wide', 'wide'],
-  [9.0, 'wide', 'bind'],
-  [14.0, 'bind', 'gprot'],
-  [18.0, 'gprot', 'ac'],
-  [27.0, 'ac', 'react'],
-  [28.5, 'react', 'cloud'],
-  [30.0, 'cloud', 'nucleus'],
-  [34.0, 'nucleus', 'blocked'],
-  [45.0, 'blocked', 'blocked'],
-  [51.0, 'blocked', 'bind'],
-  [56.0, 'bind', 'gprot'],
-  [60.0, 'gprot', 'ac'],
-  [65.0, 'ac', 'react'],
-  [68.0, 'react', 'treatedWide'],
-  [72.0, 'treatedWide', 'treatedWide'],
+  [11.0, 'wide', 'bind'],
+  [16.0, 'bind', 'gprot'],
+  [20.0, 'gprot', 'ac'],
+  [29.0, 'ac', 'react'],
+  [30.5, 'react', 'cloud'],
+  [32.0, 'cloud', 'nucleus'],
+  [36.0, 'nucleus', 'blocked'],
+  [47.0, 'blocked', 'blocked'],
+  [53.0, 'blocked', 'bind'],
+  [58.0, 'bind', 'gprot'],
+  [62.0, 'gprot', 'ac'],
+  [67.0, 'ac', 'react'],
+  [70.0, 'react', 'treatedWide'],
+  [74.0, 'treatedWide', 'treatedWide'],
 ];
 function cameraForTime(t) {
   let segStart = 0;
@@ -417,29 +430,32 @@ function cameraForTime(t) {
 // ---------------------------------------------------------------------
 // Curves driving the pathway's visual state over the whole story
 // ---------------------------------------------------------------------
-const pathwayActivity = (t) => sampleCurve(t, [[3, 0.12], [14, 1], [30, 1], [34, 0.05], [51, 0.05], [56, 1], [72, 1]]);
-const campLevel = (t) => sampleCurve(t, [[18, 0], [27, 1], [33, 0.06], [60, 0.06], [67, 1], [72, 1]]);
-const grayReceptor = (t) => sampleCurve(t, [[3, 0], [30, 0], [34, 1], [51, 1], [56, 0], [72, 0]]);
-const xOpacity = (t) => sampleCurve(t, [[30, 0], [34, 1], [48, 1], [52, 0]]);
-const pparOpacity = (t) => sampleCurve(t, [[63, 0], [67, 1], [72, 1]]);
-const convActive = (t) => (t >= 17 && t < 30.5) || (t >= 59.5 && t < 68);
+const receptorGlow = (t) => sampleCurve(t, [[4, 0.15], [11, 1], [32, 1], [36, 0.05], [50, 0.05], [58, 1], [74, 1]]);
+const gSplitLevel = (t) => sampleCurve(t, [[11, 0], [15, 1], [32, 1], [36, 0], [53, 0], [57, 1], [74, 1]]);
+const gTravelLevel = (t) => sampleCurve(t, [[13, 0], [19, 1], [32, 1], [36, 0], [55, 0], [61, 1], [74, 1]]);
+const acGlow = (t) => sampleCurve(t, [[16, 0], [20, 1], [32, 1], [36, 0.05], [59, 0.05], [63, 1], [74, 1]]);
+const campLevel = (t) => sampleCurve(t, [[20, 0], [29, 1], [35, 0.06], [62, 0.06], [69, 1], [74, 1]]);
+const grayReceptor = (t) => sampleCurve(t, [[3, 0], [32, 0], [36, 1], [53, 1], [58, 0], [74, 0]]);
+const xOpacity = (t) => sampleCurve(t, [[32, 0], [36, 1], [50, 1], [54, 0]]);
+const pparOpacity = (t) => sampleCurve(t, [[65, 0], [69, 1], [74, 1]]);
+const convActive = (t) => (t >= 19 && t < 32.5) || (t >= 61.5 && t < 70);
 
 // ---------------------------------------------------------------------
 // Caption track
 // ---------------------------------------------------------------------
 const CAPTIONS = [
-  [4, 9, 'A ligand binds the prostanoid receptor', 'G protein-coupled receptor on the cell membrane'],
-  [9, 14, 'The Gs protein is activated', 'Gα dissociates from Gβγ and moves to adenylate cyclase'],
-  [14, 18, 'Adenylate cyclase is activated', 'Gα-GTP binds and activates the enzyme'],
-  [18, 27, 'ATP is converted into cAMP', 'Adenylate cyclase catalyzes cyclic AMP formation'],
-  [27, 30, 'cAMP rises — downstream effects follow', 'Vasodilation, antiproliferation, anti-inflammation'],
-  [30, 34, 'In fibrotic disease, the receptor is downregulated', 'Signaling through this pathway weakens'],
-  [34, 48, 'Adenylate cyclase becomes dysfunctional', 'cAMP production collapses and downstream effects are lost'],
-  [45, 51, 'Treprostinil binds the receptor', 'Restoring receptor engagement'],
-  [51, 56, 'The Gs protein is reactivated', ''],
-  [56, 60, 'Adenylate cyclase is reactivated', ''],
-  [60, 65, 'cAMP production resumes', ''],
-  [65, 68, 'A parallel PPARβ pathway may also contribute', 'Hypothesized mechanism'],
+  [4, 11, 'A ligand binds the EP2, IP and DP1 receptors', 'G protein-coupled receptors on the cell membrane'],
+  [11, 16, 'The Gs protein is activated', 'Gα dissociates from Gβγ and moves to adenylate cyclase'],
+  [16, 20, 'Adenylate cyclase is activated', 'Gα-GTP binds and activates the enzyme'],
+  [20, 29, 'ATP is converted into cAMP', 'Adenylate cyclase catalyzes cyclic AMP formation'],
+  [29, 32, 'cAMP rises — downstream effects follow', 'Vasodilation, antiproliferation, anti-inflammation'],
+  [32, 36, 'In fibrotic disease, the receptors are downregulated', 'Signaling through this pathway weakens'],
+  [36, 50, 'Adenylate cyclase becomes dysfunctional', 'cAMP production collapses and downstream effects are lost'],
+  [47, 53, 'Treprostinil binds the EP2, IP and DP1 receptors', 'Restoring receptor engagement'],
+  [53, 58, 'The Gs protein is reactivated', ''],
+  [58, 62, 'Adenylate cyclase is reactivated', ''],
+  [62, 65, 'cAMP production resumes', ''],
+  [65, 70, 'A parallel PPARβ pathway may also contribute', 'Hypothesized mechanism'],
 ];
 function updateCaptionTrack(t) {
   const entry = CAPTIONS.find(([a, b]) => t >= a && t < b);
@@ -485,7 +501,7 @@ function setSceneTime(t) {
   tagCyto.style.opacity = String(clamp01(zoneOpacity));
 
   // ---- legend (brief, during the intro) ----
-  const legendOpacity = sampleCurve(t, [[3.5, 0], [5, 1], [8, 1], [9.5, 0]]);
+  const legendOpacity = sampleCurve(t, [[3.5, 0], [5, 1], [9, 1], [10.5, 0]]);
   legendEl.style.opacity = String(legendOpacity);
 
   // ---- header ----
@@ -500,51 +516,59 @@ function setSceneTime(t) {
   updateLabel(headerLabel, headerOpacity);
   updateLabel(subLabel, headerOpacity);
 
-  // ---- receptor / AC glow ----
-  const activity = pathwayActivity(t);
+  // ---- receptors / AC glow ----
+  const rGlow = receptorGlow(t);
+  const gSplit = gSplitLevel(t);
+  const gTravel = gTravelLevel(t);
+  const acGlowNow = acGlow(t);
   const gray = grayReceptor(t);
-  receptor.userData.mat.color.copy(receptor.userData.baseColor).lerp(grayColor, gray);
-  receptor.userData.mat.emissive.copy(receptor.userData.baseColor).multiplyScalar(0.5 * activity);
-  ac.userData.mat.emissive.copy(ac.userData.baseColor).multiplyScalar(0.5 * activity);
-  updateLabel(receptorLabel, headerOpacity);
+  ac.userData.mat.emissive.copy(ac.userData.baseColor).multiplyScalar(0.5 * acGlowNow);
   updateLabel(acLabel, headerOpacity);
 
-  // ---- ligands ----
-  if (t < 4) {
-    ligandNormal.visible = false;
-  } else if (t < STAGES.fibrotic[0]) {
-    ligandNormal.visible = true;
-    lerpV3(ligandNormal.position, ligandStartPos, dockPos, smoothstep((t - 4) / 5));
-  } else if (t < 36) {
-    const leaveT = smoothstep((t - STAGES.fibrotic[0]) / 4);
-    lerpV3(ligandNormal.position, dockPos, ligandExitPos, leaveT);
-    ligandNormal.visible = leaveT < 0.98;
-  } else {
-    ligandNormal.visible = false;
-  }
-  if (t < 45) {
-    ligandTreprostinil.visible = false;
-  } else {
-    ligandTreprostinil.visible = true;
-    lerpV3(ligandTreprostinil.position, ligandStartPos, dockPos, smoothstep((t - 45) / 5));
-  }
+  for (const r of receptors) {
+    r.g.userData.mat.color.copy(r.g.userData.baseColor).lerp(grayColor, gray);
+    r.g.userData.mat.emissive.copy(r.g.userData.baseColor).multiplyScalar(0.5 * rGlow);
+    updateLabel(r.label, headerOpacity);
 
-  // ---- G protein ----
-  gprotein.position.copy(gDockPos);
-  gprotein.visible = t >= 8;
-  const split = smoothstep((activity - 0.3) / 0.4);
-  gprotein.userData.bg.position.x = lerp(0, -0.55, split);
-  const travel = smoothstep((activity - 0.5) / 0.5);
-  const alphaTarget = acActiveSite.clone().add(new THREE.Vector3(0, 0.4, 0)).sub(gprotein.position);
-  const alphaRest = new THREE.Vector3(0, 0, 0);
-  lerpV3(gprotein.userData.alpha.position, alphaRest, alphaTarget, travel);
-  gprotein.userData.bg.visible = travel < 0.98;
-  gprotein.userData.alphaMat.emissive.set(COL.galpha).multiplyScalar(0.4 * activity);
+    // normal ligand: staggered binding, then staggered detach into the fibrotic act
+    const bindStart = 4 + r.delay * 3;
+    const leaveStart = STAGES.fibrotic[0] + r.delay * 2;
+    if (t < bindStart) {
+      r.ligandNormal.visible = false;
+    } else if (t < leaveStart) {
+      r.ligandNormal.visible = true;
+      lerpV3(r.ligandNormal.position, r.ligandStartPos, r.dockPos, smoothstep((t - bindStart) / 5));
+    } else if (t < leaveStart + 4) {
+      const leaveT = smoothstep((t - leaveStart) / 4);
+      lerpV3(r.ligandNormal.position, r.dockPos, r.ligandExitPos, leaveT);
+      r.ligandNormal.visible = leaveT < 0.98;
+    } else {
+      r.ligandNormal.visible = false;
+    }
+
+    // treprostinil ligand: staggered rebinding during the treated act
+    const tBindStart = STAGES.treated[0] + r.delay * 3;
+    if (t < tBindStart) {
+      r.ligandTreprostinil.visible = false;
+    } else {
+      r.ligandTreprostinil.visible = true;
+      lerpV3(r.ligandTreprostinil.position, r.ligandStartPos, r.dockPos, smoothstep((t - tBindStart) / 5));
+    }
+
+    // G protein: split near the receptor, then Gα travels to the adenylate cyclase
+    r.gprotein.position.copy(r.gDockPos);
+    r.gprotein.visible = t >= 8;
+    r.gprotein.userData.bg.position.x = lerp(0, -0.55, gSplit);
+    const alphaTarget = acActiveSite.clone().add(r.alphaTargetOffset).sub(r.gprotein.position);
+    lerpV3(r.gprotein.userData.alpha.position, new THREE.Vector3(0, 0, 0), alphaTarget, gTravel);
+    r.gprotein.userData.bg.visible = gTravel < 0.98;
+    r.gprotein.userData.alphaMat.emissive.set(COL.galpha).multiplyScalar(0.4 * gSplit);
+  }
 
   // ---- ATP -> cAMP conversion loop ----
   const cActive = convActive(t);
   const cycleLen = 2.6;
-  const cycleStartT = t < 40 ? 17 : 59.5;
+  const cycleStartT = t < 42 ? 19 : 61.5;
   for (const c of converters) {
     if (!cActive) { c.atp.visible = false; c.camp.visible = false; continue; }
     const localT = ((t - cycleStartT) / cycleLen + c.phase) % 1;
@@ -589,16 +613,16 @@ function setSceneTime(t) {
   nucleusMat.opacity = 0.2 + 0.28 * level;
   dna.rotation.y = t * 0.22;
   for (const m of dna.userData.mats) m.emissive.copy(m.color).multiplyScalar(0.28 * level);
-  const nucleusText = t < STAGES.fibrotic[0] ? 'Gene transcription — active' : t < 57 ? 'Gene transcription — reduced' : 'Gene transcription — restored';
+  const nucleusText = t < STAGES.fibrotic[0] ? 'Gene transcription — active' : t < 59 ? 'Gene transcription — reduced' : 'Gene transcription — restored';
   nucleusLabel.el.textContent = nucleusText;
   updateLabel(nucleusLabel, headerOpacity);
 
   // ---- downstream effects card ----
   let dsTitle, dsLines;
   if (t < STAGES.fibrotic[0]) { dsTitle = 'DOWNSTREAM EFFECTS'; dsLines = ['Vasodilation', 'Antiproliferation', 'Anti-inflammation']; }
-  else if (t < 57) { dsTitle = 'DOWNSTREAM EFFECTS (DOWNREGULATED)'; dsLines = ['↓ Vasodilation', '↓ Antiproliferation', '↓ Anti-inflammation']; }
+  else if (t < 59) { dsTitle = 'DOWNSTREAM EFFECTS (DOWNREGULATED)'; dsLines = ['↓ Vasodilation', '↓ Antiproliferation', '↓ Anti-inflammation']; }
   else { dsTitle = 'DOWNSTREAM EFFECTS (RESTORED)'; dsLines = ['↑ Vasodilation', '↑ Antiproliferation', '↑ Anti-inflammation']; }
-  const cardOpacity = sampleCurve(t, [[26, 0], [29, 1]]);
+  const cardOpacity = sampleCurve(t, [[28, 0], [31, 1]]);
   updateCard(downstreamCard, dsTitle, dsLines, cardOpacity);
 
   // ---- PPARbeta branch ----
