@@ -134,9 +134,7 @@ const COL = {
   gbg: 0x9fb8ff,
   atp: 0xd8d8d8,
   camp: 0xffd76a,
-  gray: 0x555a66,
 };
-const grayColor = new THREE.Color(COL.gray);
 
 // ---------------------------------------------------------------------
 // Membrane
@@ -333,13 +331,6 @@ downstreamAnchor.position.set(ac.position.x + 1.6, -2.6, 1.7);
 scene.add(downstreamAnchor);
 const downstreamCard = makeCard({ anchor: downstreamAnchor });
 
-// Red X — blocked pathway (fibrotic act)
-const xAnchor = new THREE.Object3D();
-xAnchor.position.set(2.2, 0.25, 1.3);
-scene.add(xAnchor);
-const xLabel = makeLabel('✕', { anchor: xAnchor });
-xLabel.el.classList.add('xmark');
-
 // PPARbeta branch — parallel pathway shown only once treprostinil restores signaling
 const pparGroup = new THREE.Group();
 pparGroup.position.set(ac.position.x + 3.6, -1.9, 0);
@@ -430,13 +421,13 @@ function cameraForTime(t) {
 // ---------------------------------------------------------------------
 // Curves driving the pathway's visual state over the whole story
 // ---------------------------------------------------------------------
-const receptorGlow = (t) => sampleCurve(t, [[4, 0.15], [11, 1], [32, 1], [36, 0.05], [50, 0.05], [58, 1], [74, 1]]);
-const gSplitLevel = (t) => sampleCurve(t, [[11, 0], [15, 1], [32, 1], [36, 0], [53, 0], [57, 1], [74, 1]]);
-const gTravelLevel = (t) => sampleCurve(t, [[13, 0], [19, 1], [32, 1], [36, 0], [55, 0], [61, 1], [74, 1]]);
-const acGlow = (t) => sampleCurve(t, [[16, 0], [20, 1], [32, 1], [36, 0.05], [59, 0.05], [63, 1], [74, 1]]);
+// Receptor / Gs protein / adenylate cyclase keep functioning normally throughout —
+// the fibrotic act only lowers cAMP itself; the upstream cause is not asserted.
+const receptorGlow = (t) => sampleCurve(t, [[4, 0.15], [11, 1], [74, 1]]);
+const gSplitLevel = (t) => sampleCurve(t, [[11, 0], [15, 1], [74, 1]]);
+const gTravelLevel = (t) => sampleCurve(t, [[13, 0], [19, 1], [74, 1]]);
+const acGlow = (t) => sampleCurve(t, [[16, 0], [20, 1], [74, 1]]);
 const campLevel = (t) => sampleCurve(t, [[20, 0], [29, 1], [35, 0.06], [62, 0.06], [69, 1], [74, 1]]);
-const grayReceptor = (t) => sampleCurve(t, [[3, 0], [32, 0], [36, 1], [53, 1], [58, 0], [74, 0]]);
-const xOpacity = (t) => sampleCurve(t, [[32, 0], [36, 1], [50, 1], [54, 0]]);
 const pparOpacity = (t) => sampleCurve(t, [[65, 0], [69, 1], [74, 1]]);
 const convActive = (t) => (t >= 19 && t < 32.5) || (t >= 61.5 && t < 70);
 
@@ -449,8 +440,8 @@ const CAPTIONS = [
   [16, 20, 'Adenylate cyclase is activated', 'Gα-GTP binds and activates the enzyme'],
   [20, 29, 'ATP is converted into cAMP', 'Adenylate cyclase catalyzes cyclic AMP formation'],
   [29, 32, 'cAMP rises — downstream effects follow', 'Vasodilation, antiproliferation, anti-inflammation'],
-  [32, 36, 'In fibrotic disease, the receptors are downregulated', 'Signaling through this pathway weakens'],
-  [36, 50, 'Adenylate cyclase becomes dysfunctional', 'cAMP production collapses and downstream effects are lost'],
+  [32, 37, 'In fibrotic disease, intracellular cAMP concentration falls', 'The exact upstream cause is not fully defined'],
+  [37, 50, 'cAMP levels remain low', 'Downstream effects are reduced as a result'],
   [47, 53, 'Treprostinil binds the EP2, IP and DP1 receptors', 'Restoring receptor engagement'],
   [53, 58, 'The Gs protein is reactivated', ''],
   [58, 62, 'Adenylate cyclase is reactivated', ''],
@@ -507,7 +498,7 @@ function setSceneTime(t) {
   // ---- header ----
   let headerText, headerColor, subText;
   if (t < STAGES.fibrotic[0]) { headerText = '1. NORMAL STATE'; headerColor = '#7fe0a0'; subText = 'Functional cAMP signaling'; }
-  else if (t < STAGES.treated[0]) { headerText = '2. FIBROTIC STATE'; headerColor = '#ff9a8a'; subText = 'Disrupted / downregulated cAMP pathway'; }
+  else if (t < STAGES.treated[0]) { headerText = '2. FIBROTIC STATE'; headerColor = '#ff9a8a'; subText = 'Reduced cAMP concentration — cause not fully defined'; }
   else { headerText = '3. WITH TREPROSTINIL'; headerColor = '#7fd7e8'; subText = 'Restored / rebalanced signaling'; }
   headerLabel.el.textContent = headerText;
   headerLabel.el.style.color = headerColor;
@@ -521,12 +512,10 @@ function setSceneTime(t) {
   const gSplit = gSplitLevel(t);
   const gTravel = gTravelLevel(t);
   const acGlowNow = acGlow(t);
-  const gray = grayReceptor(t);
   ac.userData.mat.emissive.copy(ac.userData.baseColor).multiplyScalar(0.5 * acGlowNow);
   updateLabel(acLabel, headerOpacity);
 
   for (const r of receptors) {
-    r.g.userData.mat.color.copy(r.g.userData.baseColor).lerp(grayColor, gray);
     r.g.userData.mat.emissive.copy(r.g.userData.baseColor).multiplyScalar(0.5 * rGlow);
     updateLabel(r.label, headerOpacity);
 
@@ -606,9 +595,6 @@ function setSceneTime(t) {
     p.mesh.scale.setScalar(0.4 + 0.6 * smoothstep((level - p.order) / 0.06));
   }
 
-  // ---- X mark ----
-  updateLabel(xLabel, xOpacity(t));
-
   // ---- nucleus / DNA ----
   nucleusMat.opacity = 0.2 + 0.28 * level;
   dna.rotation.y = t * 0.22;
@@ -620,7 +606,7 @@ function setSceneTime(t) {
   // ---- downstream effects card ----
   let dsTitle, dsLines;
   if (t < STAGES.fibrotic[0]) { dsTitle = 'DOWNSTREAM EFFECTS'; dsLines = ['Vasodilation', 'Antiproliferation', 'Anti-inflammation']; }
-  else if (t < 59) { dsTitle = 'DOWNSTREAM EFFECTS (DOWNREGULATED)'; dsLines = ['↓ Vasodilation', '↓ Antiproliferation', '↓ Anti-inflammation']; }
+  else if (t < 59) { dsTitle = 'DOWNSTREAM EFFECTS (REDUCED)'; dsLines = ['↓ Vasodilation', '↓ Antiproliferation', '↓ Anti-inflammation']; }
   else { dsTitle = 'DOWNSTREAM EFFECTS (RESTORED)'; dsLines = ['↑ Vasodilation', '↑ Antiproliferation', '↑ Anti-inflammation']; }
   const cardOpacity = sampleCurve(t, [[28, 0], [31, 1]]);
   updateCard(downstreamCard, dsTitle, dsLines, cardOpacity);
